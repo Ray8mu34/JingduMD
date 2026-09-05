@@ -28,7 +28,12 @@ jobs:
         with:
           components: rustfmt, clippy
           targets: ${{ matrix.target }}
-      - run: pnpm install --frozen-lockfile
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: pnpm install --frozen-lockfile --package-import-method=copy
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        run: pnpm install --frozen-lockfile
       - name: macOS checks and packages
         if: runner.os == 'macOS'
         run: node scripts/release-macos.mjs ${{ matrix.target }}
