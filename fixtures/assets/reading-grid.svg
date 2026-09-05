@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="480" viewBox="0 0 960 480">
+  <rect width="960" height="480" fill="#f3efe5"/>
+  <g fill="#4b6f78" opacity=".18">
+    <rect x="80" y="70" width="800" height="2"/><rect x="80" y="130" width="800" height="2"/><rect x="80" y="190" width="800" height="2"/><rect x="80" y="250" width="800" height="2"/><rect x="80" y="310" width="800" height="2"/><rect x="80" y="370" width="800" height="2"/>
+  </g>
+  <text x="480" y="235" text-anchor="middle" font-family="Microsoft YaHei UI, sans-serif" font-size="42" fill="#3e5960">静读 Markdown</text>
+  <text x="480" y="285" text-anchor="middle" font-family="Georgia, serif" font-size="22" fill="#716b62">Reading fixture - 960 x 480</text>
+</svg>
+

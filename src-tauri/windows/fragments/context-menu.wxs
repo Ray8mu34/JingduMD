@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="TARGETDIR">
+      <Component Id="JingReaderContextMenu" Guid="*">
+        <RegistryKey Root="HKCU" Key="Software\Classes\Directory\shell\JingReader" ForceCreateOnInstall="yes" ForceDeleteOnUninstall="yes">
+          <RegistryValue Type="string" Value="使用静读 Markdown 打开" KeyPath="yes" />
+          <RegistryValue Type="string" Name="Icon" Value="[INSTALLDIR]JingReader.exe" />
+        </RegistryKey>
+        <RegistryKey Root="HKCU" Key="Software\Classes\Directory\shell\JingReader\command" ForceCreateOnInstall="yes" ForceDeleteOnUninstall="yes">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]JingReader.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <RegistryKey Root="HKCU" Key="Software\Classes\Directory\Background\shell\JingReader" ForceCreateOnInstall="yes" ForceDeleteOnUninstall="yes">
+          <RegistryValue Type="string" Value="使用静读 Markdown 打开" />
+          <RegistryValue Type="string" Name="Icon" Value="[INSTALLDIR]JingReader.exe" />
+        </RegistryKey>
+        <RegistryKey Root="HKCU" Key="Software\Classes\Directory\Background\shell\JingReader\command" ForceCreateOnInstall="yes" ForceDeleteOnUninstall="yes">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]JingReader.exe&quot; &quot;%V&quot;" />
+        </RegistryKey>
+
+        <RegistryKey Root="HKCU" Key="Software\Classes\SystemFileAssociations\.md\shell\JingReader" ForceCreateOnInstall="yes" ForceDeleteOnUninstall="yes">
+          <RegistryValue Type="string" Value="使用静读 Markdown 打开" />
+          <RegistryValue Type="string" Name="Icon" Value="[INSTALLDIR]JingReader.exe" />
+        </RegistryKey>
+        <RegistryKey Root="HKCU" Key="Software\Classes\SystemFileAssociations\.md\shell\JingReader\command" ForceCreateOnInstall="yes" ForceDeleteOnUninstall="yes">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]JingReader.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

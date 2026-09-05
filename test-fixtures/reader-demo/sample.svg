@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="240" viewBox="0 0 720 240">
+  <rect width="720" height="240" rx="24" fill="#315c5f"/>
+  <path d="M270 55c38-13 68-8 94 13 26-21 56-26 94-13v132c-38-9-67-4-94 18-27-22-56-27-94-18V55Z" fill="#f6f2e8"/>
+  <text x="364" y="225" text-anchor="middle" fill="#f6f2e8" font-family="Microsoft YaHei" font-size="18">静读 Markdown · 不接管目录</text>
+</svg>

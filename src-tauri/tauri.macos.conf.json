@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "静读 Markdown",
+        "width": 1380,
+        "height": 900,
+        "minWidth": 760,
+        "minHeight": 520,
+        "center": true,
+        "decorations": true,
+        "shadow": true
+      }
+    ]
+  },
+  "bundle": {
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "14.2"
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "md",
+          "markdown"
+        ],
+        "name": "Markdown 文档",
+        "role": "Viewer",
+        "rank": "Alternate"
+      }
+    ]
+  }
+}

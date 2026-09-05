@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "JingReader 主窗口权限",
+  "windows": [
+    "main",
+    "reader-*"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-start-dragging",
+    "core:webview:allow-print",
+    "dialog:allow-open",
+    "opener:allow-open-url"
+  ]
+}
