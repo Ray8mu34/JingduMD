@@ -30,7 +30,7 @@ fs.mkdirSync(output, { recursive: true });
 // Verify both slices of the universal binary before archiving the bundle.
 const architectures = target === 'universal-apple-darwin' ? ['arm64', 'x86_64']
   : [target.startsWith('aarch64') ? 'arm64' : 'x86_64'];
-run('/usr/bin/lipo', ['-verify_arch', ...architectures, path.join(app, 'Contents/MacOS/jingreader')]);
+run('/usr/bin/lipo', [path.join(app, 'Contents/MacOS/jingreader'), '-verify_arch', ...architectures]);
 run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
 const zipName = `${productName}_${version}_${target}.app.zip`;
 run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', app, path.join(output, zipName)]);
