@@ -41,7 +41,7 @@ pnpm release:macos x86_64-apple-darwin
 
 脚本运行前端测试、Rust fmt/Clippy/测试，再由 Tauri 构建前端和 App/DMG。使用 `lipo` 验证架构和 `codesign` 校验包完整性，生成保留 bundle 元数据的 `.app.zip`、DMG、SHA-256 和清单。输出位于 `release/macos/<target>/<version>/`，不会覆盖已有 Windows 安装包。
 
-仓库中的 `.github/workflows/desktop.yml` 提供 Windows、Apple Silicon、Intel 三个原生 CI 任务，测试后上传安装包为 Actions artifacts，不创建公开 Release。Mac CI 使用临时签名，仅用于测试。上传到可运行 GitHub Actions 的仓库后才能执行；当前本地目录没有可用的 Git 远程配置。
+仓库中的 `.github/workflows/desktop.yml` 提供 Windows、Apple Silicon、Intel 三个原生 CI 任务，测试后上传安装包为 Actions artifacts，不创建公开 Release。Mac CI 使用临时签名，仅用于测试。项目已连接 [Ray8mu34/JingduMD](https://github.com/Ray8mu34/JingduMD)，推送与拉取请求自动运行，也可从 Actions 页面手动运行。
 
 ## 系统集成
 
@@ -76,7 +76,19 @@ xcrun stapler validate /Applications/JingReader.app
 
 ## 验收与当前边界
 
-本轮在 Windows 验证共享代码和 Windows Rust 分支，Mac 专用接口已按依赖源码核对。**尚未在 Mac 编译、安装或实机运行；当前没有已验证的 Mac 安装包。** CI 文件已经就绪，但当前会话没有 Mac 执行环境或可用的远程仓库，不能把配置生成等同于 CI 已通过。Linux 不是本轮发布目标。
+2026-09-05，提交 `8e69e2eb4d53be8509feecf03793d7a8dc9bcb7f` 的 [GitHub Actions 运行 #33969607829](https://github.com/Ray8mu34/JingduMD/actions/runs/33969607829) 已全部成功：Apple Silicon、Intel Mac 和 Windows 均完成依赖安装、前端测试、Rust fmt/Clippy/测试、原生编译、安装包生成与 artifact 上传。两个 Mac 产物均经过 `lipo` 架构校验和 `codesign --verify --deep --strict` 完整性校验，并附带 SHA-256 清单。
+
+下载入口（需要登录 GitHub，artifact 有保留期限）：
+
+- [Apple Silicon：JingReader-aarch64-apple-darwin](https://github.com/Ray8mu34/JingduMD/actions/runs/33969607829/artifacts/9970605186)
+- [Intel Mac：JingReader-x86_64-apple-darwin](https://github.com/Ray8mu34/JingduMD/actions/runs/33969607829/artifacts/9970727807)
+- [Windows：JingReader-x86_64-pc-windows-msvc](https://github.com/Ray8mu34/JingduMD/actions/runs/33969607829/artifacts/9970710330)
+
+Mac artifact 内包含对应架构的 DMG、保留 bundle 元数据的 `.app.zip`、`SHA256SUMS.txt` 与 `release-manifest.json`。Windows artifact 包含 NSIS EXE 和 MSI。过期后可手动重新运行工作流生成。
+
+CI 调试中已修复新版 Clippy 对 UTF-16 分块迭代的检查、`lipo -verify_arch` 参数顺序；Mac 依赖安装使用 `--package-import-method=copy`，此前有一次默认导入产生含空字节的依赖 `package.json`。Windows 安装命令和安装器配置保持原有行为。
+
+**Mac GUI 最终体验由用户后续手动验收，本轮不宣称 GUI 已实测。** CI 的两份 Mac 包为临时签名测试包，未做 Developer ID 公证；通用二进制构建脚本已提供，但此次 CI 交付的是两个独立原生架构的安装包。Linux 不是本轮发布目标。
 
 2026-09-05 本地验证：47 项前端测试、17 项 Rust 测试通过，包含 Mac Command 组件交互、POSIX/Windows/UNC 路径和两套平台配置的 Tauri schema 解析。TypeScript/Vite 生产构建、Rust fmt/Clippy 通过。Windows NSIS 与 MSI 调试安装器构建成功，产物在 `src-tauri/target/debug/bundle/`；没有覆盖 `release/` 中既有发布包。构建仍提示既有的大 JavaScript 分块和 `.app` 结尾的 bundle identifier 建议；本轮保留 identifier，以免改变现有用户数据目录。
 
