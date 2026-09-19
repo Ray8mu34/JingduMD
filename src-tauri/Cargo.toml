@@ -1,6 +1,6 @@
 [package]
 name = "jingreader"
-version = "0.7.0"
+version = "0.7.1"
 description = "不接管目录的本地 Markdown 阅读器"
 authors = ["JingReader"]
 edition = "2021"

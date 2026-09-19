@@ -1,5 +1,5 @@
 import { fireEvent, render, waitFor } from "@testing-library/react";
-import MarkdownReader, { isLongDocument, sanitizeMermaidSvg } from "./MarkdownReader";
+import MarkdownReader, { isLongDocument, mermaidViewBoxWidth, sanitizeMermaidSvg } from "./MarkdownReader";
 import type { DocumentPayload } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -33,6 +33,8 @@ describe("MarkdownReader mathematics", () => {
     const { container, getByText } = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
     expect(container.querySelectorAll("span.lazy-math.math-inline")).toHaveLength(2);
     expect(container.querySelectorAll("span.lazy-math.math-display")).toHaveLength(2);
+    expect(container.querySelector("span.lazy-math.math-display")?.closest("pre")).toBeNull();
+    expect(container.querySelector("span.lazy-math.math-display")).toHaveAttribute("aria-label", "数学公式，可横向滚动");
     expect(getByText("\\(code\\)")).toBeInTheDocument();
   });
 
@@ -57,6 +59,20 @@ describe("MarkdownReader mathematics", () => {
     expect(sanitized).toContain("<path");
   });
 
+  it("keeps Mermaid diagrams in their own render boundary", () => {
+    const document: DocumentPayload = {
+      path: "C:\\notes\\diagram.md", name: "diagram.md", modifiedMs: 0, size: 0,
+      content: "```mermaid\nflowchart LR\n  A --> B\n```"
+    };
+    const { container, getByRole } = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
+    const region = getByRole("region", { name: "Mermaid 图表，可横向滚动" });
+    expect(region).toHaveClass("mermaid-block");
+    expect(region).toHaveAttribute("tabindex", "0");
+    expect(container.querySelector(".mermaid-block")?.closest("pre")).toBeNull();
+    expect(mermaidViewBoxWidth('<svg viewBox="0 0 1849.5 400"></svg>')).toBe(1849.5);
+    expect(mermaidViewBoxWidth("<svg></svg>")).toBeNull();
+  });
+
   it("enables browser-native rendering containment for very long documents", () => {
     expect(isLongDocument("段落\n".repeat(4_001))).toBe(true);
     expect(isLongDocument("普通短文")).toBe(false);
@@ -76,6 +92,18 @@ describe("MarkdownReader mathematics", () => {
     const { container, getByText } = render(<MarkdownReader document={document} night={false} showFrontmatter={false} onOpenDocument={() => {}} />);
     expect(container.querySelector(".frontmatter")).toBeNull();
     expect(getByText("可见正文")).toBeInTheDocument();
+  });
+
+  it("keeps wide tables inside a dedicated horizontal scroll region", () => {
+    const document: DocumentPayload = {
+      path: "C:\\notes\\table.md", name: "table.md", modifiedMs: 0, size: 0,
+      content: "| 时期 | 篇幅与频率 | 主题 | 人物 | 备注 |\n| --- | --- | --- | --- | --- |\n| 2021-08 | 高频、中长篇 | 写作变化 | 示例人物 | 很长的补充说明 |"
+    };
+    const { container, getByRole } = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
+    const region = getByRole("region", { name: "表格，可横向滚动" });
+    expect(region).toHaveClass("table-scroll");
+    expect(region).toHaveAttribute("tabindex", "0");
+    expect(region.querySelector("table")).toBe(container.querySelector("table"));
   });
 
   it("folds and expands fenced code blocks", () => {
