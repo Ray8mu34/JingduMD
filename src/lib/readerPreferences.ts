@@ -85,6 +85,15 @@ export const READER_PRESETS: ReaderPreset[] = [
     })
   },
   {
+    id: "modern-textbook", name: "现代教材", description: "宽松无衬线正文、蓝色章节与纯净公式", category: "技术", dark: false,
+    swatches: ["#ffffff", "#0a1628", "#2d4baf"], recipe: recipe("modern-textbook", {
+      fontSize: 19.5, lineHeight: 1.78, contentWidth: 780, paragraphSpacing: 1.05,
+      fontFamily: "sans", headingScale: 0.98, headingDensity: "airy",
+      quoteStyle: "bar", tableStyle: "plain", codeScale: 0.84, formulaScale: 1.05,
+      imageStyle: "plain", backgroundWarmth: 0, textContrast: 5
+    })
+  },
+  {
     id: "solarized", name: "Solarized 研究", description: "精确低反差色板，兼顾正文、代码与公式", category: "技术", dark: false,
     swatches: ["#fdf6e3", "#657b83", "#268bd2"], recipe: recipe("solarized", {
       fontSize: 18, lineHeight: 1.8, contentWidth: 820, paragraphSpacing: 0.9,

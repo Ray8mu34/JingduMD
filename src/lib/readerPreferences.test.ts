@@ -1,7 +1,7 @@
 import { DEFAULT_PREFERENCES } from "../types";
 import {
-  applyPreset, isDarkTheme, isPresetModified, matchingCustomProfile, migratePreferences,
-  recipeFromPreferences
+  applyPreset, findPreset, isDarkTheme, isPresetModified, matchingCustomProfile, migratePreferences,
+  READER_PRESETS, recipeFromPreferences
 } from "./readerPreferences";
 
 describe("reader presets", () => {
@@ -20,6 +20,40 @@ describe("reader presets", () => {
     expect(isPresetModified({ ...preset, lineHeight: 2 })).toBe(true);
     expect(isDarkTheme("nord")).toBe(true);
     expect(isDarkTheme("paper")).toBe(false);
+  });
+
+  it("registers the modern textbook preset with a unique stable id", () => {
+    const ids = READER_PRESETS.map((preset) => preset.id);
+    expect(ids).toContain("modern-textbook");
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(findPreset("modern-textbook")).toMatchObject({
+      id: "modern-textbook", name: "现代教材", dark: false, category: "技术"
+    });
+  });
+
+  it("applies modern textbook defaults and still allows user overrides", () => {
+    const preset = applyPreset(DEFAULT_PREFERENCES, "modern-textbook");
+    expect(preset).toMatchObject({
+      theme: "modern-textbook", fontSize: 19.5, lineHeight: 1.78, contentWidth: 780,
+      paragraphSpacing: 1.05, fontFamily: "sans", headingScale: 0.98,
+      headingDensity: "airy", quoteStyle: "bar", tableStyle: "plain",
+      formulaScale: 1.05, imageStyle: "plain", backgroundWarmth: 0
+    });
+
+    const customized = { ...preset, lineHeight: 2.03, letterSpacing: 0.012 };
+    expect(isPresetModified(customized)).toBe(true);
+    expect(customized.lineHeight).toBe(2.03);
+    expect(customized.letterSpacing).toBe(0.012);
+  });
+
+  it("switches away from modern textbook without changing existing preset recipes", () => {
+    const textbook = applyPreset(DEFAULT_PREFERENCES, "modern-textbook");
+    const technical = applyPreset(textbook, "technical");
+    expect(technical).toMatchObject({
+      theme: "technical", fontSize: 18, lineHeight: 1.72, contentWidth: 920,
+      headingDensity: "compact", tableStyle: "compact", imageStyle: "bordered"
+    });
+    expect(isPresetModified(technical)).toBe(false);
   });
 
   it("migrates the old reading ruler setting", () => {

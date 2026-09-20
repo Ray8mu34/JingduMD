@@ -8,7 +8,7 @@ export type SystemFont = { family: string; supportsCjk: boolean; supportsLatin: 
 
 export type ReaderThemeId =
   | "paper" | "humanist" | "chinese" | "editorial" | "swiss"
-  | "solarized" | "night" | "nord" | "eink" | "technical";
+  | "modern-textbook" | "solarized" | "night" | "nord" | "eink" | "technical";
 
 export type ReadingRecipe = {
   theme: ReaderThemeId;

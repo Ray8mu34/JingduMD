@@ -50,6 +50,11 @@ button { color: inherit; }
   --heading: #171816; --muted: #686a66; --border: #d2d3ce; --link: #185f8a;
   --accent: #df4032; --selection: #f1d8d2; --code-bg: #ecece8; --shadow: rgba(25, 25, 22, .1);
 }
+.theme-modern-textbook {
+  --bg: #ffffff; --surface: #fbf7ef; --surface-2: #f4eee4; --text: #0a1628;
+  --heading: #2d4baf; --muted: #526174; --border: #ded8cf; --link: #2858b8;
+  --accent: #2d4baf; --selection: #dce6ff; --code-bg: #f7f3ec; --shadow: rgba(25, 35, 58, .08);
+}
 .theme-solarized {
   --bg: #fdf6e3; --surface: #eee8d5; --surface-2: #e4deca; --text: #657b83;
   --heading: #586e75; --muted: #839496; --border: #dcd5c1; --link: #268bd2;
@@ -181,6 +186,10 @@ button { color: inherit; }
 .theme-editorial .markdown-body h2 { border-bottom-color: var(--accent); }
 .theme-swiss .markdown-body h1, .theme-swiss .markdown-body h2 { font-weight: 750; letter-spacing: -.035em; }
 .theme-swiss .markdown-body h2 { border-bottom: 3px solid var(--heading); }
+.theme-modern-textbook .markdown-body :is(h1,h2,h3,h4,h5,h6) { font-weight: 500; line-height: 1.28; letter-spacing: -.012em; }
+.theme-modern-textbook .markdown-body h1 { font-size: calc(2.1em * var(--heading-scale, 1)); margin-bottom: calc(.72em * var(--heading-space, 1)); padding-bottom: .34em; border-bottom: 1px solid color-mix(in srgb, var(--heading) 24%, transparent); }
+.theme-modern-textbook .markdown-body h2 { font-size: calc(1.5em * var(--heading-scale, 1)); margin-top: calc(2.35em * var(--heading-space, 1)); border-bottom: 0; padding-bottom: 0; }
+.theme-modern-textbook .markdown-body h3 { font-size: calc(1.2em * var(--heading-scale, 1)); margin-top: calc(1.9em * var(--heading-space, 1)); }
 .theme-eink .markdown-body a { color: var(--text); text-decoration-style: dotted; }
 .markdown-body p { margin: 0 0 var(--paragraph-space, .85em); }
 .paragraph-indent .markdown-body > p { margin-bottom: var(--paragraph-space, .28em); text-indent: var(--first-line-indent, 2em); }
@@ -198,6 +207,12 @@ button { color: inherit; }
 .callout-body > :last-child { margin-bottom: 0; }
 .callout-warning, .callout-caution { border-left-color: #b66a36; }
 .callout-tip { border-left-color: #4d8c67; }
+.theme-modern-textbook .markdown-body blockquote { padding: .65em 1.05em; border-left-color: #e0a044; background: color-mix(in srgb, var(--surface) 58%, transparent); color: var(--text); }
+.theme-modern-textbook .callout { border-color: var(--border); border-left: 3px solid #e0a044; border-radius: 2px; background: color-mix(in srgb, var(--surface) 62%, transparent); }
+.theme-modern-textbook .callout-warning, .theme-modern-textbook .callout-caution { border-left-color: #bd6b32; }
+.theme-modern-textbook .callout-tip { border-left-color: #4d8865; }
+.theme-modern-textbook .callout-heading { min-height: 36px; padding: 8px 12px 5px; }
+.theme-modern-textbook .callout-body { padding: 0 13px 11px; }
 .markdown-body ul, .markdown-body ol { padding-left: 1.55em; margin: .7em 0 1em; }
 .markdown-body li { margin: .25em 0; }
 .markdown-body li > p { margin-bottom: .3em; }
@@ -209,6 +224,9 @@ button { color: inherit; }
 .table-striped .markdown-body tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface) 68%, transparent); }
 .table-compact .markdown-body table { font-size: .82em; }
 .table-compact .markdown-body th, .table-compact .markdown-body td { padding: .32em .58em; }
+.theme-modern-textbook .markdown-body table { font-size: .9em; }
+.theme-modern-textbook .markdown-body th, .theme-modern-textbook .markdown-body td { border: 0; border-bottom: 1px solid var(--border); padding: .55em .8em; }
+.theme-modern-textbook .markdown-body th { border-top: 1px solid color-mix(in srgb, var(--text) 36%, var(--border)); border-bottom-color: color-mix(in srgb, var(--text) 36%, var(--border)); background: transparent; font-weight: 650; }
 .markdown-body code { font-family: var(--code-font, "Cascadia Code", "JetBrains Mono", Consolas, Menlo, monospace); font-size: var(--code-scale, .84em); background: var(--code-bg); border-radius: 4px; padding: .12em .32em; }
 .markdown-body pre { max-width: 100%; min-width: 0; background: var(--code-bg); border: 1px solid var(--border); border-radius: 9px; padding: 1em 1.1em; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain; line-height: 1.58; margin: 1.3em 0; }
 .markdown-body pre:focus-visible, .table-scroll:focus-visible, .mermaid-block:focus-visible, .lazy-math.math-display:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
@@ -224,6 +242,9 @@ button { color: inherit; }
 .code-block > pre { margin: 0; border: 0; border-radius: 0; }
 .code-block.is-collapsed .code-block-toolbar { border-bottom: 0; }
 .code-wrap .markdown-body pre, .code-wrap .markdown-body pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.theme-modern-textbook .markdown-body code { border-radius: 3px; }
+.theme-modern-textbook .markdown-body pre, .theme-modern-textbook .code-block { border-radius: 3px; }
+.theme-modern-textbook .code-block .code-block-toolbar { min-height: 33px; background: transparent; }
 .markdown-body img { display: block; max-width: 100%; max-height: 80vh; width: auto; margin: 1.4em auto; border-radius: 6px; box-shadow: 0 6px 24px var(--shadow); filter: brightness(var(--image-brightness, 100%)); cursor: zoom-in; }
 .image-plain .markdown-body img { border-radius: 0; box-shadow: none; }
 .image-bordered .markdown-body img { box-shadow: none; border: 1px solid var(--border); padding: 4px; background: var(--surface); }
@@ -250,6 +271,8 @@ button { color: inherit; }
 .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: .4em; }
 .lazy-math { font-size: var(--formula-scale, 1em); }
 .lazy-math.math-display { display: block; width: 100%; max-width: 100%; min-width: 0; min-height: 2.2em; text-align: center; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain; }
+.theme-modern-textbook .lazy-math.math-display { margin: 1.4em 0; padding: .15em 0; }
+.theme-modern-textbook .lazy-math.math-display .katex-display { margin: 0; padding: .2em 0; }
 .document-footer { width: min(calc(100% - 64px), var(--reader-width, 780px)); margin: 0 auto; border-top: 1px solid var(--border); padding: 24px 0 40px; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .document-footer span { flex: 1; }
 .document-footer svg { width: 14px; }
