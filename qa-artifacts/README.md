@@ -12,6 +12,16 @@
 
 Windows 桌面补查：`5a943ed` 通过 `pnpm tauri build --no-bundle` 生成 `src-tauri/target/release/jingreader.exe`。确认实际运行进程来自这个路径；原生窗口能打开已有 Markdown、展示正文与大纲，Aa 快捷浮层可打开，点回正文后关闭。该可执行文件未安装到 `C:\Program Files\JingReader`，系统中原有安装版仍是旧构建。标题栏拖动/双击、系统打印对话框和多窗口广播尚未在本轮桌面检查中完成；macOS 也未实测。
 
+## 连续正文与技术章节校样（U4）
+
+排版改动提交为 `402d834`。`u4-before-*` 取自 `f5f7cf2`，`u4-after-*` 取自 `402d834`；每组有首屏和正文中段，技术样张另有代码、宽表与窄窗截图。校样源为 `fixtures/typography-proof.md`、普通文章和五类匿名样张。两套排版使用同一份内容、`styleMode=canonical`、`appearance=warm`；阅读采用衬线正文与衬线标题，研读采用相同正文与无衬线标题。四种外观的几何一致性另由 `pnpm qa:layout` 检查。
+
+`pnpm qa:typography` 在 Windows Edge 上以 1100 × 900 CSS px 检查六份样张 × 两套排版 × 模拟设备缩放 1／1.25／1.5；技术样张还检查 760 × 900 CSS px。当前 Windows 的 `AppliedDPI=144`（系统显示缩放 150%）；脚本中的 100%／125%／150% 是浏览器模拟 deviceScaleFactor，**不是切换 Windows 显示缩放后的三次原生窗口测试**。运行数据、提交号和所用配置见 `u4-before-metrics.json`、`u4-after-metrics.json`。
+
+Edge 字形检查实际落到：中文正文 `Noto Serif SC`、西文正文 `Georgia`；阅读标题 `Noto Serif SC`／`Georgia`，研读标题 `Noto Sans SC`／`Segoe UI`；代码 `Cascadia Code`；数学包含 `KaTeX_Main`、`KaTeX_Math`、`KaTeX_Size2`。首屏和推导中段已人工对照：研读标题的字体角色明确不同，公式前后语句保持连续；短代码留在正文栏，长代码与宽表使用可滚动容器。自动检查覆盖整页溢出、宽表末列、短代码栏宽及公式字体加载。
+
+尚需在真实 Windows WebView2 下分别切换系统 100%／125%／150% 显示缩放，复核混排字重与标点、标题换行和宽内容；macOS WKWebView 也需要独立校样。浏览器截图和自动检查不构成这两项桌面验收。
+
 基线为 `8fb3d80`；截图来自 Windows 上的 Edge 浏览器，视口截图为 1100 × 900 CSS px（设置面板另有 760px 视口）。`before-*.png` 是基线版本的 11 种旧主题，`after-legacy-*.png` 是兼容路径，同名文件可逐一比较。`after-reading-*.png` 与 `after-study-*.png` 覆盖两套新排版和四种外观；`after-settings-*.png` 包含一级与高级设置。`print-page-1.png`、`print-page-2.png` 是长内容打印校样。扩展样张保留了基线样张的开头，又增加了后续验收内容，因此旧版与新版截图可比较共同的开头区域。
 
 固定样张在 `fixtures/`：`plain-article.md`、`reader-showcase.md`、`anonymous-timeline.md`、`readme-sample.md`、`delayed-long.md`。`sample-*.png` 是五类样张的阅读/暖纸校样。浏览器样张入口为 `qa.html`。
