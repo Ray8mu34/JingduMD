@@ -5,7 +5,7 @@ import { applyPreset } from "./lib/readerPreferences";
 import "katex/dist/katex.min.css";
 import "./styles.css";
 
-const names = ["reader-showcase.md", "plain-article.md", "anonymous-timeline.md", "readme-sample.md", "delayed-long.md", "navigation-links.md"];
+const names = ["reader-showcase.md", "plain-article.md", "anonymous-timeline.md", "readme-sample.md", "delayed-long.md", "navigation-links.md", "typography-proof.md", "chinese-longform.md", "english-longform.md"];
 const root = "C:\\qa-fixtures";
 const paths = names.map((name) => `${root}\\${name}`);
 const params = new URLSearchParams(location.search);
@@ -31,7 +31,7 @@ const qaFonts = [{ family: "Arial", displayName: "Arial（本地化）", aliases
     : index === 1
       ? { family: "Microsoft YaHei", displayName: "微软雅黑", aliases: [], supportsCjk: true, supportsLatin: true }
       : { family: `Sample Font ${String(index + 1).padStart(2, "0")}`, displayName: `样张字体 ${index + 1}`, aliases: [], supportsCjk: index % 2 === 0, supportsLatin: true })];
-const state = { saves: [] as ReaderPreferences[], calls: [] as string[], fontCalls: 0, fonts: qaFonts, fontFailures: 0, positions, positionWrites, positionReadFailures, positionReadDelays, documentReadDelays, selected: paths[names.indexOf(requested ?? "")] ?? paths[0],
+const state = { basePreferences: initial, saves: [] as ReaderPreferences[], calls: [] as string[], fontCalls: 0, fonts: qaFonts, fontFailures: 0, positions, positionWrites, positionReadFailures, positionReadDelays, documentReadDelays, selected: paths[names.indexOf(requested ?? "")] ?? paths[0],
   emitPreferences(preferences: ReaderPreferences) {
     const handler = listeners.get("preferences-updated");
     if (handler) callbacks.get(handler)?.({ payload: { source: "other-window", preferences } });
