@@ -315,8 +315,8 @@ button { color: inherit; }
 .mermaid-canvas svg { display: block; width: 100% !important; max-width: none !important; height: auto !important; }
 .diagram-error { color: #bd6262; white-space: pre-wrap; }
 .katex-display { max-width: none; overflow: visible; padding: .4em; }
-.lazy-math { font-size: var(--formula-scale, 1em); }
-.lazy-math.math-display { display: block; width: 100%; max-width: 100%; min-width: 0; min-height: 2.2em; padding: .6em 0; text-align: center; overflow: auto; overscroll-behavior-inline: contain; }
+.lazy-math { font-size: calc(var(--formula-scale, 1em) * .95); }
+.lazy-math.math-display { display: block; width: 100%; max-width: 100%; min-width: 0; min-height: 2.2em; padding: .6em 0 .5em; text-align: center; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain; }
 .theme-modern-textbook .lazy-math.math-display { margin: 1.4em 0; padding: .15em 0; }
 .theme-modern-textbook .lazy-math.math-display .katex-display { margin: 0; padding: .2em 0; }
 .document-footer { width: min(calc(100% - 64px), var(--reader-width, 780px)); margin: 0 auto; border-top: 1px solid var(--border); padding: 24px 0 40px; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
@@ -562,7 +562,7 @@ button { color: inherit; }
 .style-canonical .markdown-body p:has(+ .math-display) { margin-bottom: .25em; }
 .style-canonical .markdown-body .math-display + p { margin-top: .15em; }
 .style-canonical .markdown-body .lazy-math.math-display { margin: .35em 0 .3em; padding: .1em 0; }
-.style-canonical .markdown-body .lazy-math.math-display .katex-display { margin: 0; padding: .1em 0; }
+.style-canonical .markdown-body .lazy-math.math-display .katex-display { margin: 0; padding: .1em 0 .5em; }
 .style-canonical .markdown-body > :is(.table-frame:has(table tr > :nth-child(6)),.code-block.is-wide,.mermaid-block.is-wide,.math-display.is-wide) { position: relative; left: 50%; transform: translateX(-50%); width: min(calc(100% + 180px), calc(100cqw - 36px)); max-width: none; }
 .style-canonical .markdown-body blockquote { padding: .1em 0 .1em 1em; background: transparent; border-left: 2px solid var(--accent); color: var(--text); font-style: normal; }
 .style-canonical .markdown-body img { max-height: none; border-radius: 0; box-shadow: none; filter: brightness(var(--image-brightness, 100%)); }
