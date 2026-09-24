@@ -10,7 +10,7 @@ const root = "C:\\qa-fixtures";
 const paths = names.map((name) => `${root}\\${name}`);
 const params = new URLSearchParams(location.search);
 const stored = localStorage.getItem("jingreader-qa-preferences");
-const initial = stored ? JSON.parse(stored) as ReaderPreferences : params.get("legacy") ? applyPreset(DEFAULT_PREFERENCES, params.get("legacy") as ReaderPreferences["theme"]) : DEFAULT_PREFERENCES;
+const initial = stored ? JSON.parse(stored) as ReaderPreferences : params.get("legacy") ? applyPreset(DEFAULT_PREFERENCES, params.get("legacy") as ReaderPreferences["theme"]) : { ...DEFAULT_PREFERENCES, typographyOverrides: { reading: params.get("selectedFont") ? { chineseFont: params.get("selectedFont")! } : {}, study: {} } };
 const documents = new Map<string, DocumentPayload>();
 for (const [index, name] of names.entries()) {
   const content = await fetch(`/fixtures/${name}`).then((response) => response.text());
@@ -24,7 +24,10 @@ const positionWrites: string[] = [];
 const positionReadFailures = new Set<string>();
 const positionReadDelays = new Map<string, number>();
 const documentReadDelays = new Map<string, number>();
-const state = { saves: [] as ReaderPreferences[], calls: [] as string[], fontCalls: 0, positions, positionWrites, positionReadFailures, positionReadDelays, documentReadDelays, selected: paths[names.indexOf(requested ?? "")] ?? paths[0],
+const qaFonts = [{ family: "Arial", displayName: "Arial（本地化）", aliases: ["ArialMT"], supportsCjk: false, supportsLatin: true },
+  { family: "Noto Serif SC", displayName: "思源宋体", aliases: ["NotoSerifSC-Regular"], supportsCjk: true, supportsLatin: true },
+  ...Array.from({ length: 54 }, (_, index) => ({ family: `Sample Font ${String(index + 1).padStart(2, "0")}`, displayName: `样张字体 ${index + 1}`, aliases: [], supportsCjk: index % 2 === 0, supportsLatin: true }))];
+const state = { saves: [] as ReaderPreferences[], calls: [] as string[], fontCalls: 0, fonts: qaFonts, fontFailures: 0, positions, positionWrites, positionReadFailures, positionReadDelays, documentReadDelays, selected: paths[names.indexOf(requested ?? "")] ?? paths[0],
   emitPreferences(preferences: ReaderPreferences) {
     const handler = listeners.get("preferences-updated");
     if (handler) callbacks.get(handler)?.({ payload: { source: "other-window", preferences } });
@@ -67,7 +70,7 @@ const internals = {
         return null;
       }
       case "get_index_diagnostics": return { documentCount: 3, indexedCount: 3, databaseBytes: 0 };
-      case "list_system_fonts": state.fontCalls++; return [];
+      case "list_system_fonts": state.fontCalls++; if (state.fontFailures > 0) { state.fontFailures--; throw new Error("QA font enumeration failed"); } return structuredClone(state.fonts);
       case "plugin:window|is_maximized": return false;
       case "plugin:event|listen": listeners.set(String(args.event), Number(args.handler)); return Number(args.handler);
       case "plugin:event|unlisten": return null;

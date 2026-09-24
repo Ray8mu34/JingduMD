@@ -638,6 +638,24 @@ button { color: inherit; }
 .detail-tabs button.active { border-bottom-color: var(--accent); color: var(--heading); font-weight: 650; }
 .detail-fields { display: grid; gap: 5px; padding: 9px 0; }
 .simple-settings .detail-fields label { display: grid; grid-template-columns: minmax(95px, 1fr) 135px auto; align-items: center; gap: 5px; margin: 2px 0; font-size: 13px; }
+.font-catalog-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 0 7px; color: var(--muted); font-size: 11px; }
+.font-catalog-actions button, .font-picker-retry { border: 0; background: transparent; color: var(--link); cursor: pointer; font-size: 12px; }
+.font-role-fields { display: grid; gap: 9px; padding: 3px 0 12px; }
+.reading-font-picker { display: grid; grid-template-columns: 102px minmax(0, 1fr); align-items: center; gap: 7px; position: relative; font-size: 12px; }
+.font-picker-label { color: var(--text); }
+.reading-font-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; height: 34px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--text); cursor: pointer; text-align: left; }
+.reading-font-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reading-font-trigger svg { flex: 0 0 auto; width: 14px; height: 14px; }
+.reading-font-popover { grid-column: 1 / -1; min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); box-shadow: 0 8px 22px var(--shadow); }
+.reading-font-popover input { width: 100%; height: 34px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--text); }
+.font-picker-count { padding: 6px 2px; color: var(--muted); font-size: 11px; }
+.reading-font-list { max-height: min(280px, 45vh); overflow-y: auto; overscroll-behavior: contain; }
+.reading-font-list [role="option"] { display: flex; justify-content: space-between; align-items: center; gap: 7px; width: 100%; min-height: 31px; padding: 5px 7px; border: 0; border-radius: 4px; background: transparent; color: var(--text); cursor: pointer; text-align: left; }
+.reading-font-list [role="option"].active { background: var(--selection); }
+.reading-font-list [role="option"] span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reading-font-list [role="option"] small { display: inline; margin-left: 6px; color: var(--muted); font-size: 10px; }
+.reading-font-list [role="option"] svg { width: 14px; height: 14px; color: var(--accent); }
+.reading-font-trigger:focus-visible, .reading-font-list [role="option"]:focus-visible, .reading-font-popover input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .detail-fields input, .simple-settings .detail-fields select { min-width: 0; width: 100%; height: 32px; margin: 0; padding: 4px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--text); }
 .detail-links { display: flex; gap: 20px; border-top: 1px solid var(--border); }
 .simple-settings .legacy-choices button { display: flex; align-items: center; justify-content: space-between; }

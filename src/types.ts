@@ -4,7 +4,7 @@ export type OutlineItem = { level: number; text: string; id: string };
 export type DocumentPayload = { path: string; name: string; content: string; modifiedMs: number; size: number };
 export type SearchResult = { path: string; name: string; snippet: string; score: number };
 export type SearchResponse = { results: SearchResult[]; partial: boolean; mode: "empty" | "index" | "scan" };
-export type SystemFont = { family: string; supportsCjk: boolean; supportsLatin: boolean };
+export type SystemFont = { family: string; displayName?: string; aliases?: string[]; supportsCjk: boolean; supportsLatin: boolean };
 
 export type ReaderThemeId =
   | "paper" | "humanist" | "chinese" | "editorial" | "swiss"

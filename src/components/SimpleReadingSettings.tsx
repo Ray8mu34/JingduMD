@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
 import { ArrowLeft, Check, Minus, Plus, X } from "lucide-react";
 import type { AppearanceId, ReaderPreferences, SystemFont, TypographyProfileId, TypographyOverride } from "../types";
 import { applyPreset, chooseAppearance, chooseTypographyProfile, READER_PRESETS, resolveReadingStyle, setTypographyOverride } from "../lib/readerPreferences";
+import { loadFontCatalog } from "../lib/fontCatalog";
+import ReadingFontPicker from "./ReadingFontPicker";
 
 type Props = { value: ReaderPreferences; onChange: (value: ReaderPreferences) => void; onClose: (reason?: "button" | "tab") => void; onLegacyEdit: () => void };
 type Page = "quick" | "paragraph" | "fonts" | "personal" | "legacy";
@@ -17,6 +18,7 @@ export default function SimpleReadingSettings({ value, onChange, onClose, onLega
   const [page, setPage] = useState<Page>("quick");
   const [fonts, setFonts] = useState<SystemFont[]>([]);
   const [fontError, setFontError] = useState("");
+  const [fontsLoading, setFontsLoading] = useState(false);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [sizeDraft, setSizeDraft] = useState(String(value.fontSize));
@@ -25,11 +27,16 @@ export default function SimpleReadingSettings({ value, onChange, onClose, onLega
   useEffect(() => { panel.current?.querySelector<HTMLElement>("[data-initial-focus]")?.focus(); }, [page]);
   useEffect(() => { setSizeDraft(String(value.fontSize)); }, [value.fontSize]);
   useEffect(() => {
-    if (page !== "fonts" || !isTauri()) return;
+    if (page !== "fonts") return;
     let active = true;
-    void invoke<SystemFont[]>("list_system_fonts").then((items) => { if (active) setFonts(items); }).catch((error) => { if (active) setFontError(String(error)); });
+    setFontsLoading(true);
+    void loadFontCatalog().then((items) => { if (active) { setFonts(items); setFontError(""); } }).catch((error) => { if (active) setFontError(String(error)); }).finally(() => { if (active) setFontsLoading(false); });
     return () => { active = false; };
   }, [page]);
+  const refreshFonts = () => {
+    setFontsLoading(true); setFontError("");
+    void loadFontCatalog(true).then((items) => setFonts(items)).catch((error) => setFontError(String(error))).finally(() => setFontsLoading(false));
+  };
   const change = (next: ReaderPreferences) => {
     for (const key of styleKeys) if (value[key] !== next[key]) {
       if (!touched.current.has(key) || value[key] !== applied.current.get(key)) baseline.current.set(key, value[key]);
@@ -97,7 +104,7 @@ export default function SimpleReadingSettings({ value, onChange, onClose, onLega
         {value.styleMode === "canonical" && <button className="text-action" onClick={() => change({ ...value, typographyOverrides: { ...value.typographyOverrides, [value.typographyProfile]: {} } })}>恢复当前排版默认值</button>}
         <div className="detail-links"><button onClick={() => setPage("personal")}>个人排版</button><button onClick={() => setPage("legacy")}>兼容样式</button></div>
       </>}
-      {page === "fonts" && <><nav className="detail-tabs" aria-label="详细排版页面"><button data-initial-focus onClick={() => setPage("paragraph")}>段落</button><button className="active">字体</button></nav>{fontError && <p>{fontError}</p>}<datalist id="reading-fonts">{fonts.map((font) => <option key={font.family} value={font.family} />)}</datalist><div className="detail-fields">{(["chineseFont", "latinFont", "headingFont", "codeFont"] as const).map((key) => <label key={key}>{({ chineseFont: "中文正文", latinFont: "西文正文", headingFont: "标题", codeFont: "代码" })[key]}<input list="reading-fonts" value={effective[key]} placeholder="使用排版默认字体" onChange={(event) => setDetail(key, event.target.value)} /></label>)}</div></>}
+      {page === "fonts" && <><nav className="detail-tabs" aria-label="详细排版页面"><button data-initial-focus onClick={() => setPage("paragraph")}>段落</button><button className="active">字体</button></nav><div className="font-catalog-actions"><span>{fontsLoading ? "正在读取字体…" : fontError || `本机 ${fonts.length} 种字体`}</span><button onClick={refreshFonts}>刷新列表</button></div><div className="font-role-fields">{(["chineseFont", "latinFont", "headingFont", "codeFont"] as const).map((key) => <ReadingFontPicker key={key} label={({ chineseFont: "中文正文", latinFont: "西文正文", headingFont: "标题", codeFont: "代码" })[key]} value={effective[key]} fonts={fonts} loading={fontsLoading} error={fontError} onRetry={refreshFonts} onSelect={(family) => setDetail(key, family)} />)}</div></>}
       {page === "personal" && <><p>保存当前排版，供以后快速选用。</p>{value.personalTypographies.map((item) => <div className="personal-type" key={item.id}><button data-initial-focus onClick={() => change({ ...value, styleMode: "canonical", typographyProfile: item.profile, typographyOverrides: { ...value.typographyOverrides, [item.profile]: item.overrides } })}>{item.name}</button><button onClick={() => change({ ...value, personalTypographies: value.personalTypographies.filter((entry) => entry.id !== item.id) })} aria-label={`删除${item.name}`}>删除</button></div>)}{saving ? <div className="personal-type"><input data-initial-focus aria-label="个人排版名称" value={name} onChange={(event) => setName(event.target.value)} placeholder="名称" /><button onClick={savePersonal}>保存</button><button onClick={() => setSaving(false)}>取消</button></div> : <button className="text-action" data-initial-focus onClick={() => setSaving(true)}>另存当前排版…</button>}</>}
       {page === "legacy" && <><p>继续使用升级前的十一种样式与个人样式。</p><div className="legacy-choices">{READER_PRESETS.map((preset) => <button key={preset.id} data-initial-focus={preset.id === value.theme ? true : undefined} onClick={() => change(applyPreset(value, preset.id))}>{preset.name}{value.styleMode === "legacy" && value.theme === preset.id && <Check />}</button>)}</div>{value.customProfiles.map((profile) => <button className="text-action" key={profile.id} onClick={() => change({ ...value, styleMode: "legacy", legacyAppearance: null, ...profile.recipe })}>{profile.name}</button>)}<button className="text-action" onClick={onLegacyEdit}>编辑原有样式…</button></>}
     </div>

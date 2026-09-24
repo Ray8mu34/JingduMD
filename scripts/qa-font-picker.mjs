@@ -1,0 +1,83 @@
+import { createServer } from "vite";
+import { chromium } from "playwright";
+
+const server = await createServer({ server: { host: "127.0.0.1", port: 5188 } });
+await server.listen();
+const browser = await chromium.launch({ executablePath: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", headless: true });
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+try {
+  const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+  await page.goto(`${server.resolvedUrls.local[0]}qa-app.html?selectedFont=Arial`);
+  await page.locator(".markdown-body h1").waitFor();
+  await page.waitForFunction(() => window.__JINGREADER_QA__.saves.length > 0);
+  await page.getByRole("button", { name: "阅读设置" }).click();
+  await page.getByRole("button", { name: /详细排版/ }).click();
+  await page.getByRole("button", { name: "字体", exact: true }).click();
+  await page.waitForFunction(() => window.__JINGREADER_QA__.fontCalls === 1);
+  const picker = page.locator(".reading-font-picker").filter({ hasText: "中文正文" });
+  await picker.getByRole("button", { name: "中文正文字体" }).click();
+  const input = picker.getByRole("combobox", { name: "搜索中文正文字体" });
+  assert(await input.inputValue() === "", "selected Arial was copied into search query");
+  assert(await picker.getByRole("option").count() === 57, "font list was truncated by selected value");
+  await page.screenshot({ path: "qa-artifacts/r2-font-catalog-open.png" });
+  const savesBefore = await page.evaluate(() => window.__JINGREADER_QA__.saves.length);
+  await input.fill("思源");
+  assert(await picker.getByRole("option").count() === 2, "localized name did not filter the font list");
+  await page.keyboard.press("Escape");
+  assert(await picker.getByRole("combobox").count() === 0, "Escape did not close font list");
+  assert(await page.getByRole("dialog", { name: "字体" }).count() === 1, "font Escape closed parent settings");
+  assert(await page.evaluate(() => window.__JINGREADER_QA__.saves.length) === savesBefore, "search or cancel persisted a font");
+  await page.keyboard.press("Escape");
+  assert(await page.getByRole("dialog", { name: "阅读设置" }).count() === 1, "second Escape did not return to quick settings");
+  await page.getByRole("button", { name: /详细排版/ }).click();
+  await page.getByRole("button", { name: "字体", exact: true }).click();
+
+  await picker.getByRole("button", { name: "中文正文字体" }).click();
+  assert(await input.inputValue() === "", "reopening font list retained stale query");
+  await input.fill("ArialMT");
+  assert(await picker.getByRole("option").count() === 2, "old face alias did not resolve to the same family");
+  await picker.getByRole("option", { name: /Arial（本地化）/ }).click();
+  await page.waitForTimeout(300);
+  assert(await page.evaluate(() => window.__JINGREADER_QA__.saves.length) === savesBefore, "selecting the existing family caused a redundant save");
+
+  await picker.getByRole("button", { name: "中文正文字体" }).click();
+  await input.fill("样张字体 54");
+  await picker.getByRole("option", { name: /样张字体 54/ }).click();
+  await page.waitForFunction(() => window.__JINGREADER_QA__.saves.at(-1)?.typographyOverrides.reading.chineseFont === "Sample Font 54");
+  const savesAfter = await page.evaluate(() => window.__JINGREADER_QA__.saves.length);
+  assert(savesAfter === savesBefore + 1, "one font selection did not produce exactly one save");
+  await page.getByRole("button", { name: "段落", exact: true }).click();
+  await page.getByRole("button", { name: "字体", exact: true }).click();
+  assert(await page.evaluate(() => window.__JINGREADER_QA__.fontCalls) === 1, "reopening font page enumerated again without refresh");
+
+  await page.evaluate(() => { window.__JINGREADER_QA__.fonts[2] = { family: "Replacement Face", displayName: "替换字体", aliases: [], supportsCjk: true, supportsLatin: true }; });
+  await page.getByRole("button", { name: "刷新列表" }).click();
+  await page.waitForFunction(() => window.__JINGREADER_QA__.fontCalls === 2);
+  await picker.getByRole("button", { name: "中文正文字体" }).click();
+  await input.fill("替换字体");
+  assert(await picker.getByRole("option").count() === 2, "refresh ignored a same-count font replacement");
+  await page.keyboard.press("Escape");
+
+  await page.evaluate(() => { window.__JINGREADER_QA__.fontFailures = 1; });
+  await page.getByRole("button", { name: "刷新列表" }).click();
+  await page.getByText("QA font enumeration failed").waitFor();
+  await picker.getByRole("button", { name: "中文正文字体" }).click();
+  await picker.getByRole("button", { name: "重试" }).click();
+  await page.waitForFunction(() => window.__JINGREADER_QA__.fontCalls === 4);
+  await input.fill("样张字体 5");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => window.__JINGREADER_QA__.saves.at(-1)?.typographyOverrides.reading.chineseFont?.startsWith("Sample Font 5"));
+  const latin = page.locator(".reading-font-picker").filter({ hasText: "西文正文" });
+  await latin.getByRole("button", { name: "西文正文字体" }).click();
+  const latinInput = latin.getByRole("combobox", { name: "搜索西文正文字体" });
+  await latinInput.fill("Arial");
+  const beforeIme = await page.evaluate(() => window.__JINGREADER_QA__.saves.length);
+  await latinInput.evaluate((element) => element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true })));
+  assert(await latinInput.count() === 1 && await page.evaluate(() => window.__JINGREADER_QA__.saves.length) === beforeIme, "IME composition committed a partial font");
+  await page.locator(".reader-scroll > .markdown-body").click({ position: { x: 200, y: 250 } });
+  assert(await page.getByRole("dialog", { name: "字体" }).count() === 0, "outside click did not close settings around font list");
+  assert(await page.evaluate(() => window.__JINGREADER_QA__.saves.length) === beforeIme, "outside click committed an unselected font");
+  console.log(JSON.stringify({ listed: 56, selected: "Sample Font 54", cachedCalls: 1, refreshedCalls: 2, retriedCalls: 4, keyboard: true, ime: true, outside: true }));
+  await page.close();
+} finally { await browser.close(); await server.close(); }
