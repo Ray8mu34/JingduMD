@@ -19,7 +19,8 @@ const markdownSanitizeSchema = {
   attributes: {
     ...defaultSchema.attributes,
     code: [["className", /^language-./, "math-inline", "math-display"]],
-    blockquote: [["dataCallout", /^(note|tip|important|warning|caution|info|example|quote)$/]]
+    blockquote: [["dataCallout", /^(note|tip|important|warning|caution|info|example|quote)$/]],
+    a: [...(defaultSchema.attributes?.a ?? []), "id"]
   }
 };
 
@@ -67,7 +68,9 @@ function LocalImage({ documentPath, source, alt, remotePolicy, allowedRemoteHost
   const [collapsed, setCollapsed] = useState(false);
   const [previewScale, setPreviewScale] = useState(1);
   const previewRef = useRef<HTMLDivElement>(null);
+  const previewCaller = useRef<HTMLButtonElement | null>(null);
   const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const printCollapsed = useRef(false);
   const isRemote = /^https?:/i.test(source);
   const host = isRemote ? remoteHost(source) : "";
   const remoteAllowed = remotePolicy !== "block" && (remotePolicy === "allow" || allowedRemoteHosts.includes(host) || allowOnce);
@@ -93,20 +96,27 @@ function LocalImage({ documentPath, source, alt, remotePolicy, allowedRemoteHost
 
   useEffect(() => {
     if (!zoomed) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setZoomed(false); };
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") { setZoomed(false); window.setTimeout(() => previewCaller.current?.focus(), 0); } };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, [zoomed]);
-  useEffect(() => { const expand = () => setCollapsed(false); window.addEventListener("jingreader:expand-for-print", expand); return () => window.removeEventListener("jingreader:expand-for-print", expand); }, []);
+  useEffect(() => {
+    const expand = () => { printCollapsed.current = collapsed; setCollapsed(false); };
+    const restore = () => setCollapsed(printCollapsed.current);
+    window.addEventListener("jingreader:expand-for-print", expand);
+    window.addEventListener("jingreader:restore-after-print", restore);
+    return () => { window.removeEventListener("jingreader:expand-for-print", expand); window.removeEventListener("jingreader:restore-after-print", restore); };
+  }, [collapsed]);
 
   const imageLabel = alt?.trim() || source.split(/[\\/]/).pop() || "图片";
+  const closePreview = () => { setZoomed(false); window.setTimeout(() => previewCaller.current?.focus(), 0); };
 
   return <span ref={ref} className={`image-frame ${collapsed ? "is-collapsed" : ""}`}>
     {url ? <>{collapsed
       ? <span className="collapsed-media"><ImageIcon /><span title={imageLabel}>{imageLabel}</span><button type="button" onClick={() => setCollapsed(false)} title="展开图片"><ChevronRight />展开图片</button></span>
-      : <><span className="image-actions" aria-label="图片操作"><button type="button" onClick={() => setCollapsed(true)} title="折叠图片"><ChevronDown />折叠</button><button type="button" onClick={() => setZoomed(true)} title="放大查看图片"><Maximize2 />放大</button></span><img src={url} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setZoomed(true); }} /></>}
-      {zoomed && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label={alt || "图片预览"} onClick={() => setZoomed(false)}>
-        <div className="image-lightbox-toolbar" onClick={(event) => event.stopPropagation()}><button title="缩小" onClick={() => setPreviewScale((value) => Math.max(.5, value - .25))}><ZoomOut /></button><output>{Math.round(previewScale * 100)}%</output><button title="放大" onClick={() => setPreviewScale((value) => Math.min(4, value + .25))}><ZoomIn /></button><button title="适应窗口" onClick={() => setPreviewScale(1)}><Scan /></button><button title="关闭图片预览" onClick={() => setZoomed(false)}><X /></button></div>
+      : <><span className="image-actions" aria-label="图片操作"><button type="button" onClick={() => setCollapsed(true)} title="折叠图片"><ChevronDown />折叠</button><button type="button" onClick={(event) => { previewCaller.current = event.currentTarget; setZoomed(true); }} title="放大查看图片"><Maximize2 />放大</button></span><img src={url} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" onClick={(event) => { if (event.currentTarget.closest("a")) return; event.preventDefault(); event.stopPropagation(); previewCaller.current = ref.current?.querySelector<HTMLButtonElement>('.image-actions button[title="放大查看图片"]') ?? null; setZoomed(true); }} /></>}
+      {zoomed && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label={alt || "图片预览"} onClick={closePreview}>
+        <div className="image-lightbox-toolbar" onClick={(event) => event.stopPropagation()}><button title="缩小" onClick={() => setPreviewScale((value) => Math.max(.5, value - .25))}><ZoomOut /></button><output>{Math.round(previewScale * 100)}%</output><button title="放大" onClick={() => setPreviewScale((value) => Math.min(4, value + .25))}><ZoomIn /></button><button title="适应窗口" onClick={() => setPreviewScale(1)}><Scan /></button><button title="关闭图片预览" onClick={closePreview}><X /></button></div>
         <div ref={previewRef} className={`image-lightbox-stage ${previewScale > 1 ? "can-drag" : ""}`} onClick={(event) => event.stopPropagation()} onDoubleClick={() => setPreviewScale((value) => value === 1 ? 2 : 1)} onWheel={(event) => { event.preventDefault(); setPreviewScale((value) => Math.max(.5, Math.min(4, value + (event.deltaY < 0 ? .25 : -.25)))); }} onPointerDown={(event) => { const stage = previewRef.current; if (!stage || previewScale <= 1) return; dragRef.current = { x: event.clientX, y: event.clientY, left: stage.scrollLeft, top: stage.scrollTop }; stage.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { const stage = previewRef.current; const drag = dragRef.current; if (!stage || !drag) return; stage.scrollLeft = drag.left - (event.clientX - drag.x); stage.scrollTop = drag.top - (event.clientY - drag.y); }} onPointerUp={() => { dragRef.current = null; }}>
           <span className="image-lightbox-canvas" style={{ width: `${96 * previewScale}vw`, height: `${88 * previewScale}vh` }}><img src={url} alt={alt ?? ""} draggable={false} /></span>
         </div>
@@ -158,9 +168,31 @@ function CollapsibleHeading({ level, id, children }: { level: number; id?: strin
       affected.push(sibling);
       sibling = sibling.nextElementSibling as HTMLElement | null;
     }
-    for (const element of affected) element.toggleAttribute("data-section-hidden", collapsed);
-    return () => { for (const element of affected) element.removeAttribute("data-section-hidden"); };
-  }, [collapsed, level]);
+    const marker = id ?? `heading-${level}`;
+    for (const element of affected) {
+      const owners = new Set((element.dataset.sectionHiddenBy ?? "").split(" ").filter(Boolean));
+      if (collapsed) owners.add(marker); else owners.delete(marker);
+      if (owners.size) { element.dataset.sectionHiddenBy = [...owners].join(" "); element.setAttribute("data-section-hidden", ""); }
+      else { delete element.dataset.sectionHiddenBy; element.removeAttribute("data-section-hidden"); }
+    }
+    return () => { for (const element of affected) { const owners = new Set((element.dataset.sectionHiddenBy ?? "").split(" ").filter(Boolean)); owners.delete(marker); if (owners.size) element.dataset.sectionHiddenBy = [...owners].join(" "); else { delete element.dataset.sectionHiddenBy; element.removeAttribute("data-section-hidden"); } } };
+  }, [collapsed, id, level]);
+  useEffect(() => {
+    const reveal = (event: Event) => {
+      const target = (event as CustomEvent<HTMLElement>).detail;
+      const heading = ref.current;
+      if (!heading || !target || heading === target) return;
+      let sibling = heading.nextElementSibling;
+      while (sibling) {
+        const match = /^H([1-6])$/.exec(sibling.tagName);
+        if (match && Number(match[1]) <= level) break;
+        if (sibling === target || sibling.contains(target)) { setCollapsed(false); break; }
+        sibling = sibling.nextElementSibling;
+      }
+    };
+    window.addEventListener("jingreader:reveal-heading", reveal);
+    return () => window.removeEventListener("jingreader:reveal-heading", reveal);
+  }, [level]);
   useEffect(() => { const expand = () => setCollapsed(false); window.addEventListener("jingreader:expand-for-print", expand); return () => window.removeEventListener("jingreader:expand-for-print", expand); }, []);
   return createElement(`h${level}`, { id, ref, className: collapsed ? "section-collapsed" : undefined }, <button type="button" className="section-fold-button" title={collapsed ? "展开本节" : "折叠本节"} aria-label={collapsed ? "展开本节" : "折叠本节"} aria-expanded={!collapsed} onClick={() => setCollapsed((value) => !value)}>{collapsed ? <ChevronRight /> : <ChevronDown />}</button>, children);
 }
@@ -176,8 +208,33 @@ function MarkdownPre({ children }: { children?: ReactNode }) {
 }
 
 function ScrollableTable({ children }: { children?: ReactNode }) {
-  return <div className="table-scroll" role="region" aria-label="表格，可横向滚动" tabIndex={0}>
-    <table>{children}</table>
+  const viewport = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState(0);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    const measure = () => {
+      setOverflow(Math.max(0, element.scrollWidth - element.clientWidth));
+      setOffset(element.scrollLeft);
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(element);
+    const table = element.querySelector("table");
+    if (table) observer?.observe(table);
+    window.addEventListener("resize", measure);
+    measure();
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
+  }, []);
+  return <div className="table-frame">
+    {overflow > 1 && <div className="table-scroll-control">
+      <span>横向查看表格</span>
+      <input type="range" aria-label="表格横向位置" min={0} max={overflow} value={offset}
+        onChange={(event) => { if (viewport.current) viewport.current.scrollLeft = Number(event.target.value); setOffset(Number(event.target.value)); }} />
+    </div>}
+    <div ref={viewport} className="table-scroll" role="region" aria-label="表格，可横向滚动" tabIndex={0} onScroll={(event) => setOffset(event.currentTarget.scrollLeft)}>
+      <table>{children}</table>
+    </div>
   </div>;
 }
 
@@ -294,10 +351,18 @@ export default function MarkdownReader({
     h4: ({ id, children }) => <CollapsibleHeading level={4} id={id}>{children}</CollapsibleHeading>,
     h5: ({ id, children }) => <CollapsibleHeading level={5} id={id}>{children}</CollapsibleHeading>,
     h6: ({ id, children }) => <CollapsibleHeading level={6} id={id}>{children}</CollapsibleHeading>,
-    a: ({ href, children }) => <a href={href} onClick={(event) => {
+    a: ({ href, id, children }) => <a href={href} id={id} onClick={(event) => {
       event.preventDefault();
       if (!href) return;
-      if (href.startsWith("#")) document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ behavior: "smooth" });
+      if (href.startsWith("#")) {
+        const hash = decodeURIComponent(href.slice(1));
+        const target = [hash, `user-content-${hash}`, hash.startsWith("user-content-") ? hash.slice(13) : ""]
+          .map((id) => id && document.getElementById(id)).find(Boolean);
+        if (target) {
+          window.dispatchEvent(new CustomEvent("jingreader:reveal-heading", { detail: target }));
+          requestAnimationFrame(() => requestAnimationFrame(() => target.scrollIntoView({ behavior: "smooth" })));
+        }
+      }
       else if (isExternalUrl(href)) void openUrl(href);
       else {
         const [source, hash] = href.split("#");

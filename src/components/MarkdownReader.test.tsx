@@ -1,6 +1,9 @@
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import MarkdownReader, { isLongDocument, mermaidViewBoxWidth, sanitizeMermaidSvg } from "./MarkdownReader";
 import type { DocumentPayload } from "../types";
+import { openUrl } from "@tauri-apps/plugin-opener";
+
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(() => Promise.resolve()) }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((command: string) => command === "read_remote_image"
@@ -147,5 +150,16 @@ describe("MarkdownReader mathematics", () => {
     expect(getByRole("dialog", { name: "示例图" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(queryByRole("dialog", { name: "示例图" })).not.toBeInTheDocument();
+  });
+  it("preserves the destination of a linked README badge", async () => {
+    const document: DocumentPayload = {
+      path: "C:\\notes\\README.md", name: "README.md", modifiedMs: 0, size: 0,
+      content: "[![build](https://images.example.test/badge.png)](https://example.test/build)"
+    };
+    const { getByAltText, queryByRole } = render(<MarkdownReader document={document} night={false} remoteImagePolicy="allow" onOpenDocument={() => {}} />);
+    const badge = await waitFor(() => getByAltText("build"));
+    fireEvent.click(badge);
+    expect(openUrl).toHaveBeenCalledWith("https://example.test/build");
+    expect(queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

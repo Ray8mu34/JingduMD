@@ -8,6 +8,12 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "qa:layout": "node scripts/qa-layout.mjs",
+    "qa:legacy": "node scripts/qa-legacy.mjs",
+    "qa:print": "node scripts/qa-print.mjs",
+    "qa:settings": "node scripts/qa-settings.mjs",
+    "qa:samples": "node scripts/qa-samples.mjs",
+    "qa:navigation": "node scripts/qa-navigation.mjs",
     "tauri": "tauri",
     "release:macos": "node scripts/release-macos.mjs"
   },
@@ -28,24 +34,29 @@
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.0",
     "unist-util-visit": "^5.0.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
-    "@types/node": "^22.10.2",
     "@types/mdast": "^4.0.4",
+    "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "jsdom": "^25.0.1",
+    "playwright": "^1.63.0",
     "typescript": "~5.7.2",
     "vite": "^6.0.7",
     "vitest": "^2.1.8"
   },
   "packageManager": "pnpm@11.0.0",
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
