@@ -19,9 +19,9 @@ import {
   clearTextHighlights, HIGHLIGHT_COLORS, paintHighlights, resolveHighlights,
   scrollToHighlight, selectionToHighlight
 } from "./lib/highlights";
-import { readerFontCss } from "./lib/fonts";
+import { readerPresentation } from "./lib/readerPresentation";
 import { extractOutline } from "./lib/markdown";
-import { isDarkTheme, migratePreferences, resolveReadingStyle } from "./lib/readerPreferences";
+import { migratePreferences } from "./lib/readerPreferences";
 import { formatModifiedTime, readingMetrics } from "./lib/reading";
 import { captureTextAnchor, restoreTextAnchor, type TextAnchor } from "./lib/readingAnchor";
 import { handleMenuKeys, trapTab } from "./lib/focus";
@@ -664,31 +664,8 @@ export default function App() {
     void appWindow.toggleMaximize().then(() => appWindow.isMaximized()).then(setWindowMaximized);
   };
   const closeWindow = () => { if (isTauri()) void getCurrentWindow().close(); };
-  const effective = resolveReadingStyle(preferences);
-  const fallbackFonts = effective.fontFamily === "serif"
-    ? preferences.styleMode === "legacy" ? '"Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif'
-      : 'Georgia, "Noto Serif SC", "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif'
-    : preferences.styleMode === "legacy" ? '"Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif'
-      : '"Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif';
-  const customFonts = [effective.chineseFont && '"JingReader CJK"', effective.latinFont && '"JingReader Latin"', fallbackFonts].filter(Boolean).join(", ");
-  const headingFallback = effective.fontFamily === "serif"
-    ? preferences.styleMode === "legacy" ? 'Georgia, "Noto Serif CJK SC", "Songti SC", serif'
-      : 'Georgia, "Noto Serif SC", "Noto Serif CJK SC", "Songti SC", serif'
-    : preferences.styleMode === "legacy" ? 'Inter, "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif'
-      : 'Inter, "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif';
-  const headingFont = [effective.headingFont && '"JingReader Heading"', headingFallback].filter(Boolean).join(", ");
-  const codeFont = [effective.codeFont && '"JingReader Code"', '"Cascadia Code", "JetBrains Mono", Consolas, Menlo, monospace'].filter(Boolean).join(", ");
-  const headingSpace = effective.headingDensity === "compact" ? 0.78 : effective.headingDensity === "airy" ? 1.2 : 1;
-  const readerStyle = {
-    "--reader-size": `${effective.fontSize}px`, "--reader-leading": effective.lineHeight,
-    "--reader-width": `${effective.contentWidth}px`, "--paragraph-space": `${effective.paragraphSpacing}em`,
-    "--reader-font": customFonts, "--heading-font": headingFont, "--code-font": codeFont,
-    "--heading-scale": effective.headingScale, "--heading-space": headingSpace,
-    "--first-line-indent": `${effective.firstLineIndent}em`, "--reader-align": effective.textAlign,
-    "--reader-tracking": `${effective.letterSpacing}em`, "--reader-warmth": `${effective.backgroundWarmth}%`,
-    "--text-contrast": `${effective.textContrast}%`, "--code-scale": `${effective.codeScale}em`,
-    "--formula-scale": `${effective.formulaScale}em`, "--image-brightness": `${effective.imageBrightness}%`
-  } as React.CSSProperties;
+  const presentation = readerPresentation(preferences);
+  const { effective, style: readerStyle } = presentation;
   const sidebarsHidden = focusMode;
   const modalOpen = searchOpen || printOptionsOpen;
   useEffect(() => {
@@ -697,19 +674,13 @@ export default function App() {
   }, [modalOpen]);
   void historyVersion;
 
-  const readingClasses = [
-    `app theme-${effective.theme} font-${effective.fontFamily}`,
-    preferences.styleMode === "canonical" ? `style-canonical profile-${preferences.typographyProfile} appearance-${preferences.appearance}` : "style-legacy",
-    `paragraph-${effective.paragraphStyle}`, `quote-${effective.quoteStyle}`,
-    `table-${effective.tableStyle}`, `image-${effective.imageStyle}`,
-    `reading-focus-${effective.readingFocus}`,
-    effective.codeWrap ? "code-wrap" : "", preferences.pdfStyle === "current" ? "print-current-theme" : "",
+  const readingClasses = ["app", presentation.classes,
+    preferences.pdfStyle === "current" ? "print-current-theme" : "",
     preferences.pdfIncludeHighlights ? "print-with-highlights" : "print-without-highlights",
-    focusMode ? "focus-mode" : ""
-  ].filter(Boolean).join(" ");
+    focusMode ? "focus-mode" : ""].filter(Boolean).join(" ");
 
   return <div className={readingClasses}>
-    <style>{readerFontCss(effective.chineseFont, effective.latinFont, effective.headingFont, effective.codeFont)}</style>
+    <style>{presentation.fontCss}</style>
     <header ref={topbarRef} className="topbar" data-tauri-drag-region>
       <button ref={treeTrigger} onClick={() => root ? toggleTree() : void chooseFolder()} aria-expanded={narrow ? narrowTreeOpen : showTree} title={shortcutLabel("文件列表 (Ctrl+Shift+E)")} aria-label="文件列表"><PanelLeftClose /><span>文件列表</span></button>
       <button onClick={() => navigateHistory("back")} disabled={!backHistory.current.length} title="后退 (Alt+←)"><ArrowLeft /></button>
@@ -753,7 +724,7 @@ export default function App() {
           <button onClick={() => setFindOpen(false)} title="关闭"><X /></button>
         </div>}
         {doc ? <div ref={scrollRef} className="reader-scroll" style={readerStyle} onScroll={saveReadingPosition} onWheel={() => { userScrollGeneration.current++; }} onTouchStart={() => { userScrollGeneration.current++; }} onPointerDown={() => { userScrollGeneration.current++; }} onKeyDown={() => { userScrollGeneration.current++; }} onMouseUp={() => captureHighlightSelection()} onContextMenu={(event) => { if (!globalThis.getSelection()?.isCollapsed) { event.preventDefault(); captureHighlightSelection(true); } }}>
-          <MarkdownReader document={doc} night={isDarkTheme(effective.theme)} showFrontmatter={preferences.showFrontmatter} remoteImagePolicy={preferences.remoteImagePolicy} allowedRemoteHosts={preferences.allowedRemoteHosts} onAllowRemoteHost={allowRemoteHost} onOpenDocument={openDocument} />
+          <MarkdownReader document={doc} night={presentation.night} showFrontmatter={preferences.showFrontmatter} remoteImagePolicy={preferences.remoteImagePolicy} allowedRemoteHosts={preferences.allowedRemoteHosts} onAllowRemoteHost={allowRemoteHost} onOpenDocument={openDocument} />
         </div> : <div className="welcome">
           {root ? <><h1>选择一篇文档</h1><p>从文件列表中选择要阅读的 Markdown 文件。</p><button className="primary" onClick={() => narrow ? setNarrowTreeOpen(true) : setShowTree(true)}>打开文件列表</button></>
             : <><h1>打开 Markdown 开始阅读</h1><div className="welcome-actions"><button className="primary" onClick={() => void chooseFile()}><FileText />打开文件</button><button onClick={() => void chooseFolder()}><FolderOpen />打开文件夹</button></div></>}

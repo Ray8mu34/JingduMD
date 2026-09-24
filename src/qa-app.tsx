@@ -9,7 +9,8 @@ const names = ["reader-showcase.md", "plain-article.md", "anonymous-timeline.md"
 const root = "C:\\qa-fixtures";
 const paths = names.map((name) => `${root}\\${name}`);
 const params = new URLSearchParams(location.search);
-const initial = params.get("legacy") ? applyPreset(DEFAULT_PREFERENCES, params.get("legacy") as ReaderPreferences["theme"]) : DEFAULT_PREFERENCES;
+const stored = localStorage.getItem("jingreader-qa-preferences");
+const initial = stored ? JSON.parse(stored) as ReaderPreferences : params.get("legacy") ? applyPreset(DEFAULT_PREFERENCES, params.get("legacy") as ReaderPreferences["theme"]) : DEFAULT_PREFERENCES;
 const documents = new Map<string, DocumentPayload>();
 for (const [index, name] of names.entries()) {
   const content = await fetch(`/fixtures/${name}`).then((response) => response.text());
@@ -17,7 +18,13 @@ for (const [index, name] of names.entries()) {
 }
 
 const requested = params.get("sample");
-const state = { saves: [] as ReaderPreferences[], calls: [] as string[], fontCalls: 0, selected: paths[names.indexOf(requested ?? "")] ?? paths[0] };
+const listeners = new Map<string, number>();
+const state = { saves: [] as ReaderPreferences[], calls: [] as string[], fontCalls: 0, selected: paths[names.indexOf(requested ?? "")] ?? paths[0],
+  emitPreferences(preferences: ReaderPreferences) {
+    const handler = listeners.get("preferences-updated");
+    if (handler) callbacks.get(handler)?.({ payload: { source: "other-window", preferences } });
+  }
+};
 Object.assign(window, { __JINGREADER_QA__: state, isTauri: true });
 const callbacks = new Map<number, (...args: unknown[]) => void>();
 let nextCallback = 1;
@@ -30,7 +37,7 @@ const internals = {
     state.calls.push(command);
     switch (command) {
       case "load_preferences": return initial;
-      case "save_preferences": state.saves.push(structuredClone(args.preferences as ReaderPreferences)); return null;
+      case "save_preferences": state.saves.push(structuredClone(args.preferences as ReaderPreferences)); localStorage.setItem("jingreader-qa-preferences", JSON.stringify(args.preferences)); return null;
       case "consume_window_target": return params.has("noTarget") ? null : { root, selectedFile: params.has("folderOnly") ? null : state.selected };
       case "consume_startup_target": return null;
       case "list_recent_roots": return [];
@@ -42,7 +49,7 @@ const internals = {
       case "get_index_diagnostics": return { documentCount: 3, indexedCount: 3, databaseBytes: 0 };
       case "list_system_fonts": state.fontCalls++; return [];
       case "plugin:window|is_maximized": return false;
-      case "plugin:event|listen": return 1;
+      case "plugin:event|listen": listeners.set(String(args.event), Number(args.handler)); return Number(args.handler);
       case "plugin:event|unlisten": return null;
       case "plugin:dialog|open": return params.get("dialogFile") ?? paths[0];
       case "start_watch": case "index_root": case "save_reading_position": case "set_path_expanded": return null;

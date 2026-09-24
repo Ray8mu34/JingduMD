@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
   Ban, BookOpenText, Check, Database, Eye, Palette, RefreshCw, RotateCcw,
@@ -25,9 +25,8 @@ function formatBytes(value: number): string {
 
 export default function SettingsPanel(props: Props) {
   const [legacyEditor, setLegacyEditor] = useState(props.initialSection === "system");
-  const initialValue = useRef(props.value);
   return legacyEditor ? <LegacySettingsPanel {...props} initialTab={props.initialSection === "system" ? "system" : "presets"} onClose={() => { if (props.initialSection === "system") props.onClose(); else setLegacyEditor(false); }} />
-    : <SimpleReadingSettings value={props.value} initialValue={initialValue.current} sampleStyle={props.sampleStyle} onChange={props.onChange} onClose={props.onClose} onLegacyEdit={() => setLegacyEditor(true)} onPreviewStart={props.onPreviewStart ?? (() => undefined)} onPreviewEnd={props.onPreviewEnd ?? (() => undefined)} />;
+    : <SimpleReadingSettings value={props.value} onChange={props.onChange} onClose={props.onClose} onLegacyEdit={() => setLegacyEditor(true)} />;
 }
 
 function LegacySettingsPanel({ value, root, onChange, onClose, initialTab = "presets" }: Props & { initialTab?: Tab }) {
@@ -128,14 +127,13 @@ function LegacySettingsPanel({ value, root, onChange, onClose, initialTab = "pre
 
   const allFontNames = fonts.map((font) => font.family);
 
-  return <aside className="settings-sheet" aria-label="阅读设置">
-    <div className="settings-title"><div><h2>原有样式编辑</h2></div><button onClick={() => onClose("button")} title="返回阅读设置"><X /></button></div>
-    <nav className="settings-tabs" aria-label="设置分类">
+  return <aside className="settings-sheet" aria-label={initialTab === "system" ? "应用设置" : "原有样式编辑"}>
+    <div className="settings-title"><div><h2>{initialTab === "system" ? "应用设置" : "原有样式编辑"}</h2></div><button onClick={() => onClose("button")} title={initialTab === "system" ? "关闭应用设置" : "返回阅读设置"}><X /></button></div>
+    {initialTab !== "system" && <nav className="settings-tabs" aria-label="设置分类">
       <button className={tab === "presets" ? "active" : ""} onClick={() => setTab("presets")}><Palette />预设</button>
       <button className={tab === "typography" ? "active" : ""} onClick={() => setTab("typography")}><Type />排版</button>
       <button className={tab === "content" ? "active" : ""} onClick={() => setTab("content")}><Eye />内容</button>
-      <button className={tab === "system" ? "active" : ""} onClick={() => setTab("system")}><Database />系统</button>
-    </nav>
+    </nav>}
 
     {tab === "presets" && <div className="settings-page">
       <div className="settings-intro"><strong>阅读配方</strong><span>选择后立即预览；颜色、字体节奏和内容组件会一起变化。</span></div>

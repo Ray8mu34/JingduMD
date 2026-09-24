@@ -139,7 +139,7 @@ export function findPreset(id: string): ReaderPreset {
 }
 
 export function applyPreset(current: ReaderPreferences, id: ReaderThemeId): ReaderPreferences {
-  return { ...current, styleMode: "legacy", ...findPreset(id).recipe, readingRuler: findPreset(id).recipe.readingFocus !== "off" };
+  return { ...current, styleMode: "legacy", legacyAppearance: null, ...findPreset(id).recipe, readingRuler: findPreset(id).recipe.readingFocus !== "off" };
 }
 
 const canonicalProfiles: Record<TypographyProfileId, TypographyOverride> = {
@@ -165,7 +165,7 @@ export function chooseTypographyProfile(value: ReaderPreferences, profile: Typog
 }
 
 export function chooseAppearance(value: ReaderPreferences, appearance: AppearanceId): ReaderPreferences {
-  return { ...value, styleMode: "canonical", appearance, imageBrightness: value.styleMode === "legacy" ? 100 : value.imageBrightness };
+  return value.styleMode === "legacy" ? { ...value, appearance, legacyAppearance: appearance } : { ...value, appearance };
 }
 
 export function setTypographyOverride<K extends keyof TypographyOverride>(value: ReaderPreferences, key: K, next: TypographyOverride[K]): ReaderPreferences {
@@ -205,6 +205,7 @@ export function migratePreferences(saved: Partial<ReaderPreferences> | null | un
     styleMode: old || (saved.schemaVersion ?? 0) > 2 ? "legacy" : saved.styleMode === "canonical" ? "canonical" : "legacy",
     typographyProfile: saved.typographyProfile === "study" ? "study" : "reading",
     appearance: (["warm", "white", "night", "nord"] as const).includes(saved.appearance as AppearanceId) ? saved.appearance : "warm",
+    legacyAppearance: (["warm", "white", "night", "nord"] as const).includes(saved.legacyAppearance as AppearanceId) ? saved.legacyAppearance! : null,
     showTree: saved.showTree ?? (old ? true : DEFAULT_PREFERENCES.showTree),
     showOutline: saved.showOutline ?? (old ? true : DEFAULT_PREFERENCES.showOutline),
     typographyOverrides: {

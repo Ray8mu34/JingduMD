@@ -35,8 +35,7 @@ try {
     await page.locator(".reader-scroll > .markdown-body").click({ position: { x: 200, y: 250 } });
     if (await dialog.count()) throw new Error(`${width}px: reading settings remained open after document click`);
     await settings.click();
-    await dialog.locator('input[type="range"]').first().focus();
-    await page.keyboard.press("ArrowRight");
+    await dialog.getByRole("button", { name: "增大字号" }).click();
     await page.locator(".reader-scroll > .markdown-body").click({ position: { x: 200, y: 250 } });
     await page.waitForFunction(() => window.__JINGREADER_QA__?.saves.at(-1)?.fontSize === 19);
     await settings.click();

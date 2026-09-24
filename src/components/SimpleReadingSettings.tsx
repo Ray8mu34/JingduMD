@@ -1,84 +1,105 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { X } from "lucide-react";
-import katex from "katex";
-import type { CSSProperties } from "react";
-import type { AppearanceId, ReaderPreferences, SystemFont, TypographyProfileId } from "../types";
+import { ArrowLeft, Check, Minus, Plus, X } from "lucide-react";
+import type { AppearanceId, ReaderPreferences, SystemFont, TypographyProfileId, TypographyOverride } from "../types";
 import { applyPreset, chooseAppearance, chooseTypographyProfile, READER_PRESETS, resolveReadingStyle, setTypographyOverride } from "../lib/readerPreferences";
 
-type Props = { value: ReaderPreferences; initialValue: ReaderPreferences; sampleStyle?: CSSProperties; onChange: (value: ReaderPreferences) => void; onClose: (reason?: "button" | "tab") => void; onLegacyEdit: () => void; onPreviewStart: () => void; onPreviewEnd: () => void };
+type Props = { value: ReaderPreferences; onChange: (value: ReaderPreferences) => void; onClose: (reason?: "button" | "tab") => void; onLegacyEdit: () => void };
+type Page = "quick" | "paragraph" | "fonts" | "personal" | "legacy";
 const appearances: [AppearanceId, string][] = [["warm", "暖纸"], ["white", "素白"], ["night", "静谧夜读"], ["nord", "Nord 极夜"]];
+const styleKeys = ["styleMode", "typographyProfile", "appearance", "legacyAppearance", "fontSize", "lineHeight", "contentWidth", "paragraphSpacing", "fontFamily", "chineseFont", "latinFont", "headingFont", "codeFont", "headingScale", "headingDensity", "paragraphStyle", "firstLineIndent", "textAlign", "letterSpacing", "quoteStyle", "tableStyle", "codeWrap", "codeScale", "formulaScale", "imageBrightness", "imageStyle", "backgroundWarmth", "textContrast", "theme", "readingFocus", "readingRuler"] as const;
+const widths = [640, 760, 860];
 
-export default function SimpleReadingSettings({ value, initialValue, sampleStyle, onChange, onClose, onLegacyEdit, onPreviewStart, onPreviewEnd }: Props) {
-  const initial = useRef(initialValue);
-  const [advanced, setAdvanced] = useState(false);
-  const [fontOptions, setFontOptions] = useState(false);
+export default function SimpleReadingSettings({ value, onChange, onClose, onLegacyEdit }: Props) {
+  const baseline = useRef(new Map<string, unknown>());
+  const applied = useRef(new Map<string, unknown>());
+  const touched = useRef(new Set<string>());
+  const [page, setPage] = useState<Page>("quick");
   const [fonts, setFonts] = useState<SystemFont[]>([]);
   const [fontError, setFontError] = useState("");
   const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [sizeDraft, setSizeDraft] = useState(String(value.fontSize));
   const panel = useRef<HTMLElement>(null);
   const effective = resolveReadingStyle(value);
-  const gesture = { onPointerDown: onPreviewStart, onPointerUp: onPreviewEnd, onPointerCancel: onPreviewEnd, onKeyDown: onPreviewStart, onKeyUp: onPreviewEnd, onBlur: onPreviewEnd };
+  useEffect(() => { panel.current?.querySelector<HTMLElement>("[data-initial-focus]")?.focus(); }, [page]);
+  useEffect(() => { setSizeDraft(String(value.fontSize)); }, [value.fontSize]);
   useEffect(() => {
-    panel.current?.querySelector<HTMLButtonElement>(".simple-choice button")?.focus();
-  }, []);
-  useEffect(() => {
-    if (!fontOptions || !isTauri()) return;
+    if (page !== "fonts" || !isTauri()) return;
     let active = true;
     void invoke<SystemFont[]>("list_system_fonts").then((items) => { if (active) setFonts(items); }).catch((error) => { if (active) setFontError(String(error)); });
     return () => { active = false; };
-  }, [fontOptions]);
-  const undo = () => onChange({ ...value,
-    styleMode: initial.current.styleMode, typographyProfile: initial.current.typographyProfile,
-    appearance: initial.current.appearance, typographyOverrides: initial.current.typographyOverrides,
-    fontSize: initial.current.fontSize, theme: initial.current.theme,
-    imageBrightness: initial.current.imageBrightness, backgroundWarmth: initial.current.backgroundWarmth,
-    textContrast: initial.current.textContrast
-  });
+  }, [page]);
+  const change = (next: ReaderPreferences) => {
+    for (const key of styleKeys) if (value[key] !== next[key]) {
+      if (!touched.current.has(key) || value[key] !== applied.current.get(key)) baseline.current.set(key, value[key]);
+      touched.current.add(key);
+      applied.current.set(key, next[key]);
+    }
+    for (const profile of ["reading", "study"] as const) {
+      const key = `override:${profile}`;
+      if (value.typographyOverrides[profile] !== next.typographyOverrides[profile]) {
+        if (!touched.current.has(key) || value.typographyOverrides[profile] !== applied.current.get(key)) baseline.current.set(key, value.typographyOverrides[profile]);
+        touched.current.add(key);
+        applied.current.set(key, next.typographyOverrides[profile]);
+      }
+    }
+    onChange(next);
+  };
+  const setMeasure = (key: "lineHeight" | "contentWidth", next: number) => change(value.styleMode === "legacy" ? { ...value, [key]: next } : setTypographyOverride(value, key, next));
+  const setDetail = <K extends keyof TypographyOverride>(key: K, next: TypographyOverride[K]) => change(value.styleMode === "legacy" ? { ...value, [key]: next } : setTypographyOverride(value, key, next));
+  const undo = () => {
+    const next = { ...value };
+    for (const key of styleKeys) {
+      if (touched.current.has(key) && Object.is(value[key], applied.current.get(key))) (next as unknown as Record<string, unknown>)[key] = baseline.current.get(key);
+    }
+    next.typographyOverrides = { ...value.typographyOverrides };
+    for (const profile of ["reading", "study"] as const) {
+      if (touched.current.has(`override:${profile}`) && value.typographyOverrides[profile] === applied.current.get(`override:${profile}`)) next.typographyOverrides[profile] = baseline.current.get(`override:${profile}`) as TypographyOverride;
+    }
+    touched.current.clear();
+    baseline.current.clear();
+    applied.current.clear();
+    onChange(next);
+  };
   const savePersonal = () => {
     const label = name.trim() || `个人排版 ${value.personalTypographies.length + 1}`;
-    onChange({ ...value, personalTypographies: [...value.personalTypographies, {
-      id: globalThis.crypto?.randomUUID?.() ?? String(Date.now()), name: label,
-      profile: value.typographyProfile, overrides: {
-        lineHeight: effective.lineHeight, contentWidth: effective.contentWidth, paragraphSpacing: effective.paragraphSpacing,
-        fontFamily: effective.fontFamily, chineseFont: effective.chineseFont, latinFont: effective.latinFont,
-        headingFont: effective.headingFont, codeFont: effective.codeFont, headingScale: effective.headingScale,
-        headingDensity: effective.headingDensity, paragraphStyle: effective.paragraphStyle, firstLineIndent: effective.firstLineIndent,
-        textAlign: effective.textAlign, letterSpacing: effective.letterSpacing, quoteStyle: effective.quoteStyle,
-        tableStyle: effective.tableStyle, codeWrap: effective.codeWrap, codeScale: effective.codeScale,
-        formulaScale: effective.formulaScale, imageStyle: effective.imageStyle
-      }
-    }] });
-    setName("");
+    change({ ...value, personalTypographies: [...value.personalTypographies, { id: globalThis.crypto?.randomUUID?.() ?? String(Date.now()), name: label, profile: value.typographyProfile, overrides: {
+      lineHeight: effective.lineHeight, contentWidth: effective.contentWidth, paragraphSpacing: effective.paragraphSpacing,
+      fontFamily: effective.fontFamily, chineseFont: effective.chineseFont, latinFont: effective.latinFont,
+      headingFont: effective.headingFont, codeFont: effective.codeFont, headingScale: effective.headingScale,
+      headingDensity: effective.headingDensity, paragraphStyle: effective.paragraphStyle, firstLineIndent: effective.firstLineIndent,
+      textAlign: effective.textAlign, letterSpacing: effective.letterSpacing, quoteStyle: effective.quoteStyle,
+      tableStyle: effective.tableStyle, codeWrap: effective.codeWrap, codeScale: effective.codeScale,
+      formulaScale: effective.formulaScale, imageStyle: effective.imageStyle
+    } }] });
+    setName(""); setSaving(false);
   };
-  return <aside ref={panel} className="settings-sheet simple-settings" role="dialog" aria-label="阅读设置" onBlur={(event) => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) onClose("tab"); }}>
-    <div className="settings-title"><div><h2>阅读设置</h2><small>选择后立即应用并自动保存</small></div><button onClick={() => onClose("button")} aria-label="关闭阅读设置"><X /></button></div>
-    {value.styleMode === "legacy" && <div className="legacy-notice">当前保留原有样式：{READER_PRESETS.find((item) => item.id === value.theme)?.name ?? value.theme}。选择下方排版或外观后启用新版阅读样式。</div>}
+  const defaultLeading = value.typographyProfile === "study" ? 1.78 : 1.85;
+  const leadingOptions = [defaultLeading - .1, defaultLeading, defaultLeading + .1];
+  const selectedAppearance = value.styleMode === "legacy" ? value.legacyAppearance : value.appearance;
+  const title = ({ quick: "阅读设置", paragraph: "段落与细节", fonts: "字体", personal: "个人排版", legacy: "兼容样式" } as const)[page];
+  return <aside ref={panel} className={`settings-sheet simple-settings page-${page}`} role="dialog" aria-label={title} onBlur={(event) => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) onClose("tab"); }} onKeyDown={(event) => { if (event.key === "Escape" && page !== "quick") { event.preventDefault(); event.stopPropagation(); setPage("quick"); } }}>
+    <div className="settings-title"><div className="settings-heading">{page !== "quick" && <button aria-label="返回阅读设置" onClick={() => setPage("quick")}><ArrowLeft /></button>}<h2>{title}</h2></div><button onClick={() => onClose("button")} aria-label="关闭阅读设置"><X /></button></div>
     <div className="simple-settings-body">
-      <section><h3>排版</h3><div className="simple-choice">{(["reading", "study"] as TypographyProfileId[]).map((profile) => <button key={profile} className={value.styleMode === "canonical" && value.typographyProfile === profile ? "active" : ""} onClick={() => onChange(chooseTypographyProfile(value, profile))}><strong>{profile === "reading" ? "阅读" : "研读"}</strong><small>{profile === "reading" ? "舒展的长文节奏" : "紧凑的章节与推导"}</small></button>)}</div></section>
-      <section><h3>外观</h3><div className="simple-choice appearance-choice">{appearances.map(([id, label]) => <button key={id} className={`appearance-chip ${id} ${value.styleMode === "canonical" && value.appearance === id ? "active" : ""}`} onClick={() => onChange(chooseAppearance(value, id))}>{label}</button>)}</div></section>
-      <section><label>正文字号 <output>{value.fontSize}px</output><input type="range" min="14" max="26" step=".5" value={value.fontSize} {...gesture} onChange={(event) => onChange({ ...value, fontSize: Number(event.target.value) })} /></label></section>
-      <div className="settings-sample" style={sampleStyle}><article className="markdown-body"><h3>章节与段落</h3><p>安静阅读 Chinese &amp; English，公式 <span className="math-inline" dangerouslySetInnerHTML={{ __html: katex.renderToString("E=mc^2", { throwOnError: false }) }} /> 自然进入句子。</p></article></div>
-      <button className="text-action" onClick={undo}>撤销本次阅读样式调整</button>
-      <details open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)}><summary>更多排版</summary>
-        <label>行高 <output>{effective.lineHeight.toFixed(2)}</output><input type="range" min="1.35" max="2.2" step=".01" value={effective.lineHeight} {...gesture} onChange={(event) => onChange(setTypographyOverride(value, "lineHeight", Number(event.target.value)))} /></label>
-        <label>正文栏宽 <output>{effective.contentWidth}px</output><input type="range" min="560" max="1000" step="20" value={effective.contentWidth} {...gesture} onChange={(event) => onChange(setTypographyOverride(value, "contentWidth", Number(event.target.value)))} /></label>
-        <label>正文风格<select value={effective.fontFamily} onChange={(event) => onChange(setTypographyOverride(value, "fontFamily", event.target.value as "serif" | "sans"))}><option value="serif">衬线</option><option value="sans">无衬线</option></select></label>
-        <label>段落<select value={effective.paragraphStyle} onChange={(event) => onChange(setTypographyOverride(value, "paragraphStyle", event.target.value as "spacing" | "indent"))}><option value="spacing">段间留白</option><option value="indent">连续行文，首行缩进</option></select></label>
-        <button className="text-action" onClick={() => onChange({ ...value, typographyOverrides: { ...value.typographyOverrides, [value.typographyProfile]: {} } })}>恢复当前排版默认值</button>
-        <details open={fontOptions} onToggle={(event) => setFontOptions(event.currentTarget.open)}><summary>字体选项</summary>
-          {fontError && <small>{fontError}</small>}
-          <datalist id="reading-fonts">{fonts.map((font) => <option key={font.family} value={font.family} />)}</datalist>
-          {(["chineseFont", "latinFont", "headingFont", "codeFont"] as const).map((key) => <label key={key}>{({ chineseFont: "中文正文", latinFont: "西文正文", headingFont: "标题", codeFont: "代码" })[key]}<input list="reading-fonts" value={effective[key]} placeholder="系统默认" onChange={(event) => onChange(setTypographyOverride(value, key, event.target.value))} /></label>)}
-        </details>
-        <div className="personal-type"><input aria-label="个人排版名称" value={name} onChange={(event) => setName(event.target.value)} placeholder="个人排版名称" /><button onClick={savePersonal}>保存当前排版</button></div>
-        {value.personalTypographies.map((item) => <div className="personal-type" key={item.id}><button onClick={() => onChange({ ...value, styleMode: "canonical", typographyProfile: item.profile, typographyOverrides: { ...value.typographyOverrides, [item.profile]: item.overrides } })}>{item.name}</button><button onClick={() => onChange({ ...value, personalTypographies: value.personalTypographies.filter((entry) => entry.id !== item.id) })} aria-label={`删除${item.name}`}>删除</button></div>)}
-      </details>
-      <details><summary>原有样式</summary><p>升级前的十一种样式和个人样式仍可使用。旧个人样式未保存的历史中西文字体无法从旧数据恢复，继续沿用当前字体。</p>
-        <div className="legacy-choices">{READER_PRESETS.map((preset) => <button key={preset.id} onClick={() => onChange(applyPreset(value, preset.id))}>{preset.name}</button>)}</div>
-        {value.customProfiles.map((profile) => <button className="text-action" key={profile.id} onClick={() => onChange({ ...value, styleMode: "legacy", ...profile.recipe })}>{profile.name}</button>)}
-        <button className="text-action" onClick={onLegacyEdit}>编辑原有样式</button>
-      </details>
+      {page === "quick" && <>
+        {value.styleMode === "legacy" && <p className="quick-legacy-note">沿用“{READER_PRESETS.find((item) => item.id === value.theme)?.name ?? value.theme}”的排版。选择“阅读”或“研读”才切换排版。</p>}
+        <section className="quick-row"><h3>字号</h3><div className="size-stepper"><button data-initial-focus aria-label="减小字号" onClick={() => change({ ...value, fontSize: Math.max(14, Math.round((value.fontSize - .5) * 2) / 2) })}><Minus /></button><input aria-label="正文字号" type="number" min="14" max="26" step="0.5" value={sizeDraft} onChange={(event) => setSizeDraft(event.target.value)} onBlur={() => { const number = Number(sizeDraft); if (Number.isFinite(number) && number >= 14 && number <= 26) change({ ...value, fontSize: number }); else setSizeDraft(String(value.fontSize)); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /><span>px</span><button aria-label="增大字号" onClick={() => change({ ...value, fontSize: Math.min(26, Math.round((value.fontSize + .5) * 2) / 2) })}><Plus /></button></div></section>
+        <section className="quick-row"><h3 id="typography-label">排版</h3><div className="quick-options typography-options" role="radiogroup" aria-labelledby="typography-label">{(["reading", "study"] as TypographyProfileId[]).map((profile) => <label key={profile}><input type="radio" name="typography" checked={value.styleMode === "canonical" && value.typographyProfile === profile} onChange={() => change(chooseTypographyProfile(value, profile))} /><span>{profile === "reading" ? "阅读" : "研读"}</span></label>)}</div></section>
+        <section className="quick-row"><h3 id="appearance-label">外观</h3><div className="quick-options appearance-options" role="radiogroup" aria-labelledby="appearance-label">{appearances.map(([id, label]) => <label key={id} title={label}><input type="radio" name="appearance" aria-label={label} checked={selectedAppearance === id} onChange={() => change(chooseAppearance(value, id))} /><span className={`appearance-dot ${id}`} aria-hidden="true" /><span>{id === "night" ? "夜读" : id === "nord" ? "极夜" : label}</span></label>)}</div></section>
+        <section className="quick-row"><h3 id="leading-label">行距</h3><div className="quick-options measure-options" role="radiogroup" aria-labelledby="leading-label">{leadingOptions.map((number, index) => <label key={index}><input type="radio" name="leading" checked={Math.abs(effective.lineHeight - number) < .005} onChange={() => setMeasure("lineHeight", number)} /><span>{["紧凑", "标准", "舒展"][index]}</span></label>)}{!leadingOptions.some((number) => Math.abs(effective.lineHeight - number) < .005) && <span className="custom-value">自定 {effective.lineHeight.toFixed(2)}</span>}</div></section>
+        <section className="quick-row"><h3 id="width-label">栏宽</h3><div className="quick-options measure-options" role="radiogroup" aria-labelledby="width-label">{widths.map((number, index) => <label key={number}><input type="radio" name="width" checked={effective.contentWidth === number} onChange={() => setMeasure("contentWidth", number)} /><span>{["窄", "标准", "宽"][index]}</span></label>)}{!widths.includes(effective.contentWidth) && <span className="custom-value">自定 {effective.contentWidth}px</span>}</div></section>
+        <div className="quick-footer"><button onClick={() => setPage("paragraph")}>详细排版…</button>{touched.current.size > 0 && <button onClick={undo}>撤销</button>}</div>
+      </>}
+      {page === "paragraph" && <>
+        <nav className="detail-tabs" aria-label="详细排版页面"><button className="active" data-initial-focus>段落</button><button onClick={() => setPage("fonts")}>字体</button></nav>
+        <div className="detail-fields"><label>精确行距 <input type="number" min="1.35" max="2.2" step="0.01" value={effective.lineHeight} onChange={(event) => setMeasure("lineHeight", Number(event.target.value))} /></label><label>精确栏宽 <input type="number" min="560" max="1200" step="1" value={effective.contentWidth} onChange={(event) => setMeasure("contentWidth", Number(event.target.value))} /> px</label><label>段落方式<select value={effective.paragraphStyle} onChange={(event) => setDetail("paragraphStyle", event.target.value as "spacing" | "indent")}><option value="spacing">段间留白</option><option value="indent">首行缩进</option></select></label><label>段间距 <input type="number" min="0.2" max="1.8" step="0.05" value={effective.paragraphSpacing} onChange={(event) => setDetail("paragraphSpacing", Number(event.target.value))} /> em</label><label>首行缩进 <input type="number" min="1" max="3" step="0.1" value={effective.firstLineIndent} onChange={(event) => setDetail("firstLineIndent", Number(event.target.value))} /> em</label><label>正文对齐<select value={effective.textAlign} onChange={(event) => setDetail("textAlign", event.target.value as "left" | "justify")}><option value="left">左对齐</option><option value="justify">两端对齐</option></select></label><label>正文字体风格<select value={effective.fontFamily} onChange={(event) => setDetail("fontFamily", event.target.value as "serif" | "sans")}><option value="serif">衬线</option><option value="sans">无衬线</option></select></label></div>
+        {value.styleMode === "canonical" && <button className="text-action" onClick={() => change({ ...value, typographyOverrides: { ...value.typographyOverrides, [value.typographyProfile]: {} } })}>恢复当前排版默认值</button>}
+        <div className="detail-links"><button onClick={() => setPage("personal")}>个人排版</button><button onClick={() => setPage("legacy")}>兼容样式</button></div>
+      </>}
+      {page === "fonts" && <><nav className="detail-tabs" aria-label="详细排版页面"><button data-initial-focus onClick={() => setPage("paragraph")}>段落</button><button className="active">字体</button></nav>{fontError && <p>{fontError}</p>}<datalist id="reading-fonts">{fonts.map((font) => <option key={font.family} value={font.family} />)}</datalist><div className="detail-fields">{(["chineseFont", "latinFont", "headingFont", "codeFont"] as const).map((key) => <label key={key}>{({ chineseFont: "中文正文", latinFont: "西文正文", headingFont: "标题", codeFont: "代码" })[key]}<input list="reading-fonts" value={effective[key]} placeholder="使用排版默认字体" onChange={(event) => setDetail(key, event.target.value)} /></label>)}</div></>}
+      {page === "personal" && <><p>保存当前排版，供以后快速选用。</p>{value.personalTypographies.map((item) => <div className="personal-type" key={item.id}><button data-initial-focus onClick={() => change({ ...value, styleMode: "canonical", typographyProfile: item.profile, typographyOverrides: { ...value.typographyOverrides, [item.profile]: item.overrides } })}>{item.name}</button><button onClick={() => change({ ...value, personalTypographies: value.personalTypographies.filter((entry) => entry.id !== item.id) })} aria-label={`删除${item.name}`}>删除</button></div>)}{saving ? <div className="personal-type"><input data-initial-focus aria-label="个人排版名称" value={name} onChange={(event) => setName(event.target.value)} placeholder="名称" /><button onClick={savePersonal}>保存</button><button onClick={() => setSaving(false)}>取消</button></div> : <button className="text-action" data-initial-focus onClick={() => setSaving(true)}>另存当前排版…</button>}</>}
+      {page === "legacy" && <><p>继续使用升级前的十一种样式与个人样式。</p><div className="legacy-choices">{READER_PRESETS.map((preset) => <button key={preset.id} data-initial-focus={preset.id === value.theme ? true : undefined} onClick={() => change(applyPreset(value, preset.id))}>{preset.name}{value.styleMode === "legacy" && value.theme === preset.id && <Check />}</button>)}</div>{value.customProfiles.map((profile) => <button className="text-action" key={profile.id} onClick={() => change({ ...value, styleMode: "legacy", legacyAppearance: null, ...profile.recipe })}>{profile.name}</button>)}<button className="text-action" onClick={onLegacyEdit}>编辑原有样式…</button></>}
     </div>
   </aside>;
 }

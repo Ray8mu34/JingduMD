@@ -89,4 +89,21 @@ describe("reader presets", () => {
     expect(resolveReadingStyle(chooseTypographyProfile(chooseTypographyProfile(changed, "study"), "reading")).chineseFont).toBe("SimSun");
     expect(changed.remoteImagePolicy).toBe("ask");
   });
+  it("changes only color selection for every legacy preset", () => {
+    for (const preset of READER_PRESETS) {
+      const original = { ...applyPreset(DEFAULT_PREFERENCES, preset.id), chineseFont: "SimSun", imageBrightness: 67 };
+      for (const appearance of ["warm", "white", "night", "nord"] as const) {
+        const next = chooseAppearance(original, appearance);
+        expect(next).toEqual({ ...original, appearance, legacyAppearance: appearance });
+        expect(resolveReadingStyle(next).lineHeight).toBe(original.lineHeight);
+        expect(resolveReadingStyle(next).headingScale).toBe(original.headingScale);
+        expect(next.imageBrightness).toBe(67);
+      }
+    }
+  });
+  it("preserves old color override on migration and clears it on preset selection", () => {
+    const changed = chooseAppearance(applyPreset(DEFAULT_PREFERENCES, "technical"), "night");
+    expect(migratePreferences(changed).legacyAppearance).toBe("night");
+    expect(applyPreset(changed, "paper").legacyAppearance).toBeNull();
+  });
 });

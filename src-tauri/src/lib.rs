@@ -131,6 +131,7 @@ struct ReaderPreferences {
     style_mode: String,
     typography_profile: String,
     appearance: String,
+    legacy_appearance: Option<String>,
     typography_overrides: serde_json::Value,
     personal_typographies: Vec<serde_json::Value>,
     theme: String,
@@ -180,6 +181,7 @@ impl Default for ReaderPreferences {
             style_mode: "legacy".to_owned(),
             typography_profile: "reading".to_owned(),
             appearance: "warm".to_owned(),
+            legacy_appearance: None,
             typography_overrides: serde_json::json!({"reading": {}, "study": {}}),
             personal_typographies: Vec::new(),
             theme: "paper".to_owned(),
@@ -2570,11 +2572,13 @@ mod tests {
         preferences.style_mode = "canonical".into();
         preferences.typography_profile = "study".into();
         preferences.appearance = "nord".into();
+        preferences.legacy_appearance = Some("night".into());
         preferences.typography_overrides = serde_json::json!({"reading":{"chineseFont":"Noto Serif SC","latinFont":"Georgia","headingFont":"Georgia","codeFont":"Consolas"},"study":{"lineHeight":1.9}});
         let persisted = serde_json::to_string(&preferences).unwrap();
         let loaded: ReaderPreferences = serde_json::from_str(&persisted).unwrap();
         assert_eq!(loaded.schema_version, 2);
         assert_eq!(loaded.appearance, "nord");
+        assert_eq!(loaded.legacy_appearance.as_deref(), Some("night"));
         assert_eq!(loaded.typography_profile, "study");
         assert_eq!(loaded.typography_overrides["reading"]["chineseFont"], "Noto Serif SC");
         assert_eq!(loaded.typography_overrides["study"]["lineHeight"], 1.9);

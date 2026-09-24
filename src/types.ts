@@ -59,6 +59,7 @@ export type ReaderPreferences = ReadingRecipe & {
   styleMode: "canonical" | "legacy";
   typographyProfile: TypographyProfileId;
   appearance: AppearanceId;
+  legacyAppearance: AppearanceId | null;
   typographyOverrides: Record<TypographyProfileId, TypographyOverride>;
   personalTypographies: PersonalTypography[];
   chineseFont: string;
@@ -99,7 +100,7 @@ export type NewTextHighlight = Omit<TextHighlight, "id" | "root" | "createdMs" |
 export type ResolvedHighlight = TextHighlight & { range: Range | null; orphaned: boolean };
 
 export const DEFAULT_PREFERENCES: ReaderPreferences = {
-  schemaVersion: 2, styleMode: "canonical", typographyProfile: "reading", appearance: "warm",
+  schemaVersion: 2, styleMode: "canonical", typographyProfile: "reading", appearance: "warm", legacyAppearance: null,
   typographyOverrides: { reading: {}, study: {} },
   personalTypographies: [],
   theme: "paper", fontSize: 18.5, lineHeight: 1.82, contentWidth: 780,
