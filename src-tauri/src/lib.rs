@@ -127,6 +127,12 @@ struct ExternalChangeEvent {
 #[serde(rename_all = "camelCase")]
 #[serde(default)]
 struct ReaderPreferences {
+    schema_version: u32,
+    style_mode: String,
+    typography_profile: String,
+    appearance: String,
+    typography_overrides: serde_json::Value,
+    personal_typographies: Vec<serde_json::Value>,
     theme: String,
     font_size: f64,
     line_height: f64,
@@ -170,6 +176,12 @@ struct ReaderPreferences {
 impl Default for ReaderPreferences {
     fn default() -> Self {
         Self {
+            schema_version: 0,
+            style_mode: "legacy".to_owned(),
+            typography_profile: "reading".to_owned(),
+            appearance: "warm".to_owned(),
+            typography_overrides: serde_json::json!({"reading": {}, "study": {}}),
+            personal_typographies: Vec::new(),
             theme: "paper".to_owned(),
             font_size: 18.5,
             line_height: 1.82,
@@ -1696,9 +1708,19 @@ fn load_preferences(state: State<AppState>) -> Result<Option<ReaderPreferences>,
         return Ok(None);
     }
     let content = fs::read_to_string(&state.preferences_path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&content)
-        .map(Some)
-        .map_err(|e| e.to_string())
+    let backup = state.preferences_path.with_extension("legacy.json");
+    let raw = serde_json::from_str::<serde_json::Value>(&content).ok();
+    let valid_v2 = raw.as_ref().is_some_and(|value| {
+        value.get("schemaVersion").and_then(|item| item.as_u64()) == Some(2)
+            && matches!(value.get("styleMode").and_then(|item| item.as_str()), Some("canonical" | "legacy"))
+            && matches!(value.get("typographyProfile").and_then(|item| item.as_str()), Some("reading" | "study"))
+            && matches!(value.get("appearance").and_then(|item| item.as_str()), Some("warm" | "white" | "night" | "nord"))
+            && matches!(value.get("theme").and_then(|item| item.as_str()), Some("paper" | "humanist" | "chinese" | "editorial" | "swiss" | "modern-textbook" | "solarized" | "night" | "nord" | "eink" | "technical"))
+    });
+    if !valid_v2 && !backup.exists() {
+        fs::copy(&state.preferences_path, &backup).map_err(|e| e.to_string())?;
+    }
+    Ok(serde_json::from_str(&content).ok())
 }
 
 #[tauri::command]
@@ -2540,6 +2562,22 @@ mod tests {
         assert!(preferences.show_frontmatter);
         assert!(preferences.show_reading_stats);
         assert!(preferences.custom_profiles.is_empty());
+    }
+    #[test]
+    fn versioned_preferences_round_trip_typography_and_appearance() {
+        let mut preferences = ReaderPreferences::default();
+        preferences.schema_version = 2;
+        preferences.style_mode = "canonical".into();
+        preferences.typography_profile = "study".into();
+        preferences.appearance = "nord".into();
+        preferences.typography_overrides = serde_json::json!({"reading":{"chineseFont":"Noto Serif SC","latinFont":"Georgia","headingFont":"Georgia","codeFont":"Consolas"},"study":{"lineHeight":1.9}});
+        let persisted = serde_json::to_string(&preferences).unwrap();
+        let loaded: ReaderPreferences = serde_json::from_str(&persisted).unwrap();
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.appearance, "nord");
+        assert_eq!(loaded.typography_profile, "study");
+        assert_eq!(loaded.typography_overrides["reading"]["chineseFont"], "Noto Serif SC");
+        assert_eq!(loaded.typography_overrides["study"]["lineHeight"], 1.9);
     }
     #[cfg(target_os = "windows")]
     #[test]

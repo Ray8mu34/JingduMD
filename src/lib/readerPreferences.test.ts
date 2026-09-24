@@ -1,6 +1,6 @@
 import { DEFAULT_PREFERENCES } from "../types";
 import {
-  applyPreset, findPreset, isDarkTheme, isPresetModified, matchingCustomProfile, migratePreferences,
+  applyPreset, chooseAppearance, chooseTypographyProfile, findPreset, isDarkTheme, isPresetModified, matchingCustomProfile, migratePreferences, resolveReadingStyle, setTypographyOverride,
   READER_PRESETS, recipeFromPreferences
 } from "./readerPreferences";
 
@@ -71,5 +71,22 @@ describe("reader presets", () => {
     const recipe = recipeFromPreferences(DEFAULT_PREFERENCES);
     const value = { ...DEFAULT_PREFERENCES, customProfiles: [{ id: "mine", name: "我的样式", recipe }] };
     expect(matchingCustomProfile(value)?.id).toBe("mine");
+  });
+  it("keeps old styles through idempotent migration", () => {
+    const old = { theme: "nord" as const, chineseFont: "SimSun", customProfiles: [{ id: "old", name: "旧样式", recipe: recipeFromPreferences(DEFAULT_PREFERENCES) }] };
+    const first = migratePreferences(old);
+    expect(first).toMatchObject({ styleMode: "legacy", theme: "nord", chineseFont: "SimSun", showTree: true, showOutline: true });
+    expect(migratePreferences(first)).toEqual(first);
+  });
+  it("separates canonical appearance, typography and reading behavior", () => {
+    const original = resolveReadingStyle(DEFAULT_PREFERENCES);
+    const night = resolveReadingStyle(chooseAppearance(DEFAULT_PREFERENCES, "night"));
+    expect(night.lineHeight).toBe(original.lineHeight);
+    expect(night.contentWidth).toBe(original.contentWidth);
+    const changed = setTypographyOverride(DEFAULT_PREFERENCES, "chineseFont", "SimSun");
+    expect(resolveReadingStyle(changed).chineseFont).toBe("SimSun");
+    expect(resolveReadingStyle(chooseTypographyProfile(changed, "study")).chineseFont).toBe("");
+    expect(resolveReadingStyle(chooseTypographyProfile(chooseTypographyProfile(changed, "study"), "reading")).chineseFont).toBe("SimSun");
+    expect(changed.remoteImagePolicy).toBe("ask");
   });
 });

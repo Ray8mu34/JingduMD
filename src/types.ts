@@ -45,7 +45,22 @@ export type CustomReaderProfile = {
   recipe: ReadingRecipe;
 };
 
+export type TypographyProfileId = "reading" | "study";
+export type AppearanceId = "warm" | "white" | "night" | "nord";
+export type TypographyOverride = Partial<Pick<ReadingRecipe,
+  "lineHeight" | "contentWidth" | "paragraphSpacing" | "fontFamily" | "headingFont" | "codeFont" |
+  "headingScale" | "headingDensity" | "paragraphStyle" | "firstLineIndent" | "textAlign" |
+  "letterSpacing" | "quoteStyle" | "tableStyle" | "codeWrap" | "codeScale" | "formulaScale" | "imageStyle"
+>> & { chineseFont?: string; latinFont?: string };
+export type PersonalTypography = { id: string; name: string; profile: TypographyProfileId; overrides: TypographyOverride };
+
 export type ReaderPreferences = ReadingRecipe & {
+  schemaVersion: number;
+  styleMode: "canonical" | "legacy";
+  typographyProfile: TypographyProfileId;
+  appearance: AppearanceId;
+  typographyOverrides: Record<TypographyProfileId, TypographyOverride>;
+  personalTypographies: PersonalTypography[];
   chineseFont: string;
   latinFont: string;
   showTree: boolean;
@@ -84,9 +99,12 @@ export type NewTextHighlight = Omit<TextHighlight, "id" | "root" | "createdMs" |
 export type ResolvedHighlight = TextHighlight & { range: Range | null; orphaned: boolean };
 
 export const DEFAULT_PREFERENCES: ReaderPreferences = {
+  schemaVersion: 2, styleMode: "canonical", typographyProfile: "reading", appearance: "warm",
+  typographyOverrides: { reading: {}, study: {} },
+  personalTypographies: [],
   theme: "paper", fontSize: 18.5, lineHeight: 1.82, contentWidth: 780,
-  paragraphSpacing: 0.85, fontFamily: "serif", showTree: true,
-  chineseFont: "", latinFont: "", showOutline: true, readingRuler: false,
+  paragraphSpacing: 0.85, fontFamily: "serif", showTree: false,
+  chineseFont: "", latinFont: "", showOutline: false, readingRuler: false,
   headingFont: "", codeFont: "", headingScale: 1, headingDensity: "balanced",
   paragraphStyle: "spacing", firstLineIndent: 2, textAlign: "left", letterSpacing: 0,
   quoteStyle: "bar", tableStyle: "plain", codeWrap: false, codeScale: 0.84,

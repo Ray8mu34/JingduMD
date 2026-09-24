@@ -1,5 +1,5 @@
 import type {
-  CustomReaderProfile, ReaderPreferences, ReaderThemeId, ReadingRecipe
+  AppearanceId, CustomReaderProfile, ReaderPreferences, ReaderThemeId, ReadingRecipe, TypographyOverride, TypographyProfileId
 } from "../types";
 import { DEFAULT_PREFERENCES } from "../types";
 
@@ -139,7 +139,40 @@ export function findPreset(id: string): ReaderPreset {
 }
 
 export function applyPreset(current: ReaderPreferences, id: ReaderThemeId): ReaderPreferences {
-  return { ...current, ...findPreset(id).recipe, readingRuler: findPreset(id).recipe.readingFocus !== "off" };
+  return { ...current, styleMode: "legacy", ...findPreset(id).recipe, readingRuler: findPreset(id).recipe.readingFocus !== "off" };
+}
+
+const canonicalProfiles: Record<TypographyProfileId, TypographyOverride> = {
+  reading: { lineHeight: 1.85, contentWidth: 760, paragraphSpacing: .88, headingDensity: "balanced", headingScale: .95, fontFamily: "serif", quoteStyle: "bar", tableStyle: "plain", imageStyle: "plain", paragraphStyle: "spacing", firstLineIndent: 2, textAlign: "left", letterSpacing: 0, codeWrap: false, codeScale: .84, formulaScale: 1, chineseFont: "", latinFont: "", headingFont: "", codeFont: "" },
+  study: { lineHeight: 1.78, contentWidth: 760, paragraphSpacing: .66, headingDensity: "compact", headingScale: .91, fontFamily: "serif", quoteStyle: "bar", tableStyle: "plain", imageStyle: "plain", paragraphStyle: "spacing", firstLineIndent: 2, textAlign: "left", letterSpacing: 0, codeWrap: false, codeScale: .84, formulaScale: 1, chineseFont: "", latinFont: "", headingFont: "", codeFont: "" }
+};
+const appearanceThemes: Record<AppearanceId, ReaderThemeId> = { warm: "paper", white: "paper", night: "night", nord: "nord" };
+
+export function resolveReadingStyle(value: ReaderPreferences): ReaderPreferences {
+  if (value.styleMode === "legacy") return value;
+  return {
+    ...value,
+    ...canonicalProfiles[value.typographyProfile],
+    ...(value.typographyOverrides?.[value.typographyProfile] ?? {}),
+    theme: appearanceThemes[value.appearance],
+    fontSize: value.fontSize,
+    imageBrightness: value.imageBrightness
+  };
+}
+
+export function chooseTypographyProfile(value: ReaderPreferences, profile: TypographyProfileId): ReaderPreferences {
+  return { ...value, styleMode: "canonical", typographyProfile: profile, imageBrightness: value.styleMode === "legacy" ? 100 : value.imageBrightness };
+}
+
+export function chooseAppearance(value: ReaderPreferences, appearance: AppearanceId): ReaderPreferences {
+  return { ...value, styleMode: "canonical", appearance, imageBrightness: value.styleMode === "legacy" ? 100 : value.imageBrightness };
+}
+
+export function setTypographyOverride<K extends keyof TypographyOverride>(value: ReaderPreferences, key: K, next: TypographyOverride[K]): ReaderPreferences {
+  return { ...value, styleMode: "canonical", imageBrightness: value.styleMode === "legacy" ? 100 : value.imageBrightness, typographyOverrides: {
+    ...value.typographyOverrides,
+    [value.typographyProfile]: { ...value.typographyOverrides[value.typographyProfile], [key]: next }
+  } };
 }
 
 export function recipeFromPreferences(value: ReaderPreferences): ReadingRecipe {
@@ -166,7 +199,20 @@ export function matchingCustomProfile(value: ReaderPreferences): CustomReaderPro
 export function migratePreferences(saved: Partial<ReaderPreferences> | null | undefined): ReaderPreferences {
   if (!saved) return DEFAULT_PREFERENCES;
   const knownTheme = READER_PRESETS.some((preset) => preset.id === saved.theme) ? saved.theme : "paper";
-  const merged = { ...DEFAULT_PREFERENCES, ...saved, theme: knownTheme } as ReaderPreferences;
+  const old = !saved.schemaVersion;
+  const merged = { ...DEFAULT_PREFERENCES, ...saved, theme: knownTheme,
+    schemaVersion: 2,
+    styleMode: old || (saved.schemaVersion ?? 0) > 2 ? "legacy" : saved.styleMode === "canonical" ? "canonical" : "legacy",
+    typographyProfile: saved.typographyProfile === "study" ? "study" : "reading",
+    appearance: (["warm", "white", "night", "nord"] as const).includes(saved.appearance as AppearanceId) ? saved.appearance : "warm",
+    showTree: saved.showTree ?? (old ? true : DEFAULT_PREFERENCES.showTree),
+    showOutline: saved.showOutline ?? (old ? true : DEFAULT_PREFERENCES.showOutline),
+    typographyOverrides: {
+      reading: saved.typographyOverrides?.reading ?? {},
+      study: saved.typographyOverrides?.study ?? {}
+    },
+    personalTypographies: Array.isArray(saved.personalTypographies) ? saved.personalTypographies : []
+  } as ReaderPreferences;
   if (merged.readingRuler && (!saved.readingFocus || saved.readingFocus === "off")) merged.readingFocus = "ruler";
   merged.readingRuler = merged.readingFocus !== "off";
   merged.customProfiles = Array.isArray(saved.customProfiles) ? saved.customProfiles : [];
