@@ -739,7 +739,7 @@ export default function App() {
   };
   const closeWindow = () => { if (isTauri()) void getCurrentWindow().close(); };
   const presentation = readerPresentation(preferences, fontCatalog);
-  const { effective, style: readerStyle } = presentation;
+  const { style: readerStyle } = presentation;
   const sidebarsHidden = focusMode;
   const modalOpen = searchOpen || printOptionsOpen;
   useEffect(() => {

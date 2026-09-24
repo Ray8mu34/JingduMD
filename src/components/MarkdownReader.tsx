@@ -1,4 +1,4 @@
-import { Children, cloneElement, createElement, isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Children, cloneElement, createContext, createElement, isValidElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -6,6 +6,7 @@ import remarkMath from "remark-math";
 import remarkFrontmatter from "remark-frontmatter";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import type { PluggableList } from "unified";
 import DOMPurify from "dompurify";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -23,6 +24,9 @@ const markdownSanitizeSchema = {
     a: [...(defaultSchema.attributes?.a ?? []), "id"]
   }
 };
+const ReaderNightContext = createContext(false);
+const markdownPlugins = [remarkGfm, remarkMath, remarkFrontmatter, remarkWikiLinks, remarkCallouts, remarkHeadingIds, remarkSanitizeHtml];
+const htmlPlugins: PluggableList = [rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]];
 
 function useVisible<T extends HTMLElement>(rootMargin = "500px") {
   const ref = useRef<T>(null);
@@ -281,7 +285,8 @@ export function mermaidViewBoxWidth(source: string): number | null {
   return Number.isFinite(width) && width > 0 ? Math.min(width, 12_000) : null;
 }
 
-function MermaidBlock({ source, night, loadMargin }: { source: string; night: boolean; loadMargin: string }) {
+function MermaidBlock({ source, loadMargin }: { source: string; loadMargin: string }) {
+  const night = useContext(ReaderNightContext);
   const { ref, visible } = useVisible<HTMLDivElement>(loadMargin);
   const [svg, setSvg] = useState<{ markup: string; width: number | null }>({ markup: "", width: null });
   const [error, setError] = useState("");
@@ -374,18 +379,20 @@ export default function MarkdownReader({
       const language = /language-([^\s]+)/.exec(className ?? "")?.[1] ?? "";
       const value = String(children).replace(/\n$/, "");
       if (language === "math") return <LazyMath source={value} display={(className ?? "").includes("math-display")} loadMargin={loadMargin} />;
-      if (language === "mermaid") return <MermaidBlock source={value} night={night} loadMargin={loadMargin} />;
+      if (language === "mermaid") return <MermaidBlock source={value} loadMargin={loadMargin} />;
       if (!className) return <code>{children}</code>;
       return <LazyCode language={language} value={value} loadMargin={loadMargin} />;
     }
-  }), [allowedRemoteHosts, doc.path, loadMargin, night, onAllowRemoteHost, onOpenDocument, remoteImagePolicy]);
+  }), [allowedRemoteHosts, doc.path, loadMargin, onAllowRemoteHost, onOpenDocument, remoteImagePolicy]);
 
-  return <article className={`markdown-body ${renderTier !== "normal" ? "long-document" : ""} ${renderTier === "extreme" ? "extreme-document" : ""}`} data-render-tier={renderTier} data-document-path={doc.path}>
+  const markdown = useMemo(() => <ReactMarkdown
+    remarkPlugins={markdownPlugins}
+    rehypePlugins={htmlPlugins}
+    components={components}
+  >{parsed.body}</ReactMarkdown>, [components, parsed.body]);
+
+  return <ReaderNightContext.Provider value={night}><article className={`markdown-body ${renderTier !== "normal" ? "long-document" : ""} ${renderTier === "extreme" ? "extreme-document" : ""}`} data-render-tier={renderTier} data-document-path={doc.path}>
     {showFrontmatter && parsed.frontmatter.length > 0 && <details className="frontmatter"><summary>文档属性</summary>{parsed.frontmatter.map((line, index) => <div key={index}>{line}</div>)}</details>}
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath, remarkFrontmatter, remarkWikiLinks, remarkCallouts, remarkHeadingIds, remarkSanitizeHtml]}
-      rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]]}
-      components={components}
-    >{parsed.body}</ReactMarkdown>
-  </article>;
+    {markdown}
+  </article></ReaderNightContext.Provider>;
 }

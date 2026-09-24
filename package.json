@@ -21,6 +21,7 @@
     "qa:font-picker": "node scripts/qa-font-picker.mjs",
     "qa:heading-fonts": "node scripts/qa-heading-fonts.mjs",
     "qa:math": "node scripts/qa-math-geometry.mjs",
+    "qa:style-contract": "node scripts/qa-style-contract.mjs",
     "tauri": "tauri",
     "release:macos": "node scripts/release-macos.mjs"
   },

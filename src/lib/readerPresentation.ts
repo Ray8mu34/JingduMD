@@ -1,18 +1,18 @@
 import type { CSSProperties } from "react";
 import type { ReaderPreferences, SystemFont } from "../types";
 import { readerFontCss } from "./fonts";
-import { isDarkTheme, resolveReadingStyle } from "./readerPreferences";
+import { resolveReaderStyle } from "../reader/styleContract";
 
 export function readerPresentation(preferences: ReaderPreferences, fonts: SystemFont[] = []) {
-  const effective = resolveReadingStyle(preferences);
+  const { typography, appearance, readingFocus } = resolveReaderStyle(preferences);
   const legacy = preferences.styleMode === "legacy";
   const profileOverrides = preferences.typographyOverrides?.[preferences.typographyProfile] ?? {};
   const inheritedHeading = {
-    cjk: !!effective.headingFont && (legacy ? !effective.chineseHeadingFont : profileOverrides.chineseHeadingFont === undefined),
-    latin: !!effective.headingFont && (legacy ? !effective.latinHeadingFont : profileOverrides.latinHeadingFont === undefined),
-    full: !!effective.headingFont && (legacy ? !effective.chineseHeadingFont && !effective.latinHeadingFont : profileOverrides.chineseHeadingFont === undefined && profileOverrides.latinHeadingFont === undefined)
+    cjk: !!typography.headingFont && (legacy ? !typography.chineseHeadingFont : profileOverrides.chineseHeadingFont === undefined),
+    latin: !!typography.headingFont && (legacy ? !typography.latinHeadingFont : profileOverrides.latinHeadingFont === undefined),
+    full: !!typography.headingFont && (legacy ? !typography.chineseHeadingFont && !typography.latinHeadingFont : profileOverrides.chineseHeadingFont === undefined && profileOverrides.latinHeadingFont === undefined)
   };
-  const serif = effective.fontFamily === "serif";
+  const serif = typography.fontFamily === "serif";
   const bodyFallback = serif
     ? legacy ? '"Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif' : 'Georgia, "Noto Serif SC", "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif'
     : legacy ? '"Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif' : '"Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif';
@@ -22,30 +22,29 @@ export function readerPresentation(preferences: ReaderPreferences, fonts: System
         : 'Georgia, "Noto Serif SC", "Noto Serif CJK SC", "Songti SC", serif'
     : legacy ? 'Inter, "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif' : 'Inter, "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif';
   const style = {
-    "--reader-size": `${effective.fontSize}px`, "--reader-leading": effective.lineHeight,
-    "--reader-width": `${effective.contentWidth}px`, "--paragraph-space": `${effective.paragraphSpacing}em`,
-    "--reader-font": [effective.chineseFont && '"JingReader CJK"', effective.latinFont && '"JingReader Latin"', bodyFallback].filter(Boolean).join(", "),
-    "--heading-font": [effective.chineseHeadingFont && '"JingReader Heading CJK"', effective.latinHeadingFont && '"JingReader Heading Latin"', inheritedHeading.full && '"JingReader Heading"', !inheritedHeading.full && inheritedHeading.cjk && '"JingReader Heading Legacy CJK"', !inheritedHeading.full && inheritedHeading.latin && '"JingReader Heading Legacy Latin"', headingFallback].filter(Boolean).join(", "),
-    "--code-font": [effective.codeFont && '"JingReader Code"', '"Cascadia Code", "JetBrains Mono", Consolas, Menlo, monospace'].filter(Boolean).join(", "),
-    "--heading-scale": effective.headingScale,
-    "--heading-space": effective.headingDensity === "compact" ? .78 : effective.headingDensity === "airy" ? 1.2 : 1,
-    "--first-line-indent": `${effective.firstLineIndent}em`, "--reader-align": effective.textAlign,
-    "--reader-tracking": `${effective.letterSpacing}em`, "--reader-warmth": `${effective.backgroundWarmth}%`,
-    "--text-contrast": `${effective.textContrast}%`, "--code-scale": `${effective.codeScale}em`,
-    "--formula-scale": `${effective.formulaScale}em`, "--image-brightness": `${effective.imageBrightness}%`
+    "--reader-size": `${typography.fontSize}px`, "--reader-leading": typography.lineHeight,
+    "--reader-width": `${typography.contentWidth}px`, "--paragraph-space": `${typography.paragraphSpacing}em`,
+    "--reader-font": [typography.chineseFont && '"JingReader CJK"', typography.latinFont && '"JingReader Latin"', bodyFallback].filter(Boolean).join(", "),
+    "--heading-font": [typography.chineseHeadingFont && '"JingReader Heading CJK"', typography.latinHeadingFont && '"JingReader Heading Latin"', inheritedHeading.full && '"JingReader Heading"', !inheritedHeading.full && inheritedHeading.cjk && '"JingReader Heading Legacy CJK"', !inheritedHeading.full && inheritedHeading.latin && '"JingReader Heading Legacy Latin"', headingFallback].filter(Boolean).join(", "),
+    "--code-font": [typography.codeFont && '"JingReader Code"', '"Cascadia Code", "JetBrains Mono", Consolas, Menlo, monospace'].filter(Boolean).join(", "),
+    "--heading-scale": typography.headingScale,
+    "--heading-space": typography.headingDensity === "compact" ? .78 : typography.headingDensity === "airy" ? 1.2 : 1,
+    "--first-line-indent": `${typography.firstLineIndent}em`, "--reader-align": typography.textAlign,
+    "--reader-tracking": `${typography.letterSpacing}em`, "--reader-warmth": `${appearance.warmth}%`,
+    "--text-contrast": `${appearance.contrast}%`, "--code-scale": `${typography.codeScale}em`,
+    "--formula-scale": `${typography.formulaScale}em`, "--image-brightness": `${appearance.imageBrightness}%`
   } as CSSProperties;
-  const appearance = legacy ? preferences.legacyAppearance : preferences.appearance;
   const classes = [
-    `theme-${effective.theme}`, `font-${effective.fontFamily}`,
+    `theme-${appearance.theme}`, `font-${typography.fontFamily}`,
     legacy ? "style-legacy" : `style-canonical profile-${preferences.typographyProfile}`,
-    appearance ? `appearance-${appearance}` : "",
-    `paragraph-${effective.paragraphStyle}`, `quote-${effective.quoteStyle}`,
-    `table-${effective.tableStyle}`, `image-${effective.imageStyle}`,
-    `reading-focus-${effective.readingFocus}`, effective.codeWrap ? "code-wrap" : ""
+    appearance.id ? `appearance-${appearance.id}` : "",
+    `paragraph-${typography.paragraphStyle}`, `quote-${typography.quoteStyle}`,
+    `table-${typography.tableStyle}`, `image-${typography.imageStyle}`,
+    `reading-focus-${readingFocus}`, typography.codeWrap ? "code-wrap" : ""
   ].filter(Boolean).join(" ");
   return {
-    effective, style, classes,
-    fontCss: readerFontCss(effective, fonts, inheritedHeading),
-    night: appearance ? appearance === "night" || appearance === "nord" : isDarkTheme(effective.theme)
+    typography, appearance, style, classes,
+    fontCss: readerFontCss(typography, fonts, inheritedHeading),
+    night: appearance.night
   };
 }

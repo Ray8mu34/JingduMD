@@ -51,6 +51,10 @@ export function readingMinutes(characters: number) {
 }
 ```
 
+```
+const unlabelledBlock = "仍按代码块排版";
+```
+
 | 项目 | 目标 |
 | --- | --- |
 | 正文 | 长时间阅读舒适 |
