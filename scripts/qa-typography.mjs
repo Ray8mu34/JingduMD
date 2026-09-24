@@ -6,6 +6,8 @@ import { execFileSync } from "node:child_process";
 
 const label = process.argv.find((arg) => arg.startsWith("--label="))?.slice(8) ?? "after";
 const sha = execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim();
+const dpiText = execFileSync("reg", ["query", "HKCU\\Control Panel\\Desktop\\WindowMetrics", "/v", "AppliedDPI"], { encoding: "utf8" });
+const windowsAppliedDpi = Number.parseInt(dpiText.match(/AppliedDPI\s+REG_DWORD\s+(0x[0-9a-f]+)/i)?.[1] ?? "", 16) || null;
 const server = await createServer({ server: { host: "127.0.0.1", port: 5186 } });
 await server.listen();
 const browser = await chromium.launch({ executablePath: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", headless: true });
@@ -63,7 +65,7 @@ try {
           }
           fonts.formula = [...formulaFamilies].map(([familyName, glyphCount]) => ({ familyName, glyphCount }));
         }
-        const record = { label, sha, sample, profile, appearance: "warm", styleMode: "canonical", cssViewport: "1100x900", simulatedDeviceScaleFactor: scale, windowsAppliedDpi: 144, metrics, fonts };
+        const record = { label, sha, sample, profile, appearance: "warm", styleMode: "canonical", cssViewport: "1100x900", simulatedDeviceScaleFactor: scale, windowsAppliedDpi, metrics, fonts };
         records.push(record);
         if (metrics.pageOverflow > 1 || metrics.scrollOverflow > 1 || !metrics.lastCellReachable || (metrics.shortCodeExtraWidth != null && metrics.shortCodeExtraWidth > 2)) failures.push(record);
         if (scale === 1.5 && ["plain-article.md", "typography-proof.md", "reader-showcase.md"].includes(sample)) {
