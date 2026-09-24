@@ -9,11 +9,13 @@ type Props = {
   fonts: SystemFont[];
   loading: boolean;
   error: string;
+  inheritedLabel?: string;
+  defaultLabel?: string;
   onSelect: (family: string) => void;
   onRetry: () => void;
 };
 
-export default function ReadingFontPicker({ label, value, fonts, loading, error, onSelect, onRetry }: Props) {
+export default function ReadingFontPicker({ label, value, fonts, loading, error, inheritedLabel, defaultLabel = "跟随排版", onSelect, onRetry }: Props) {
   const id = useId().replaceAll(":", "");
   const root = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -23,7 +25,7 @@ export default function ReadingFontPicker({ label, value, fonts, loading, error,
   const [active, setActive] = useState(0);
   const selected = canonicalFontFamily(fonts, value);
   const matches = useMemo(() => matchingFonts(fonts, query), [fonts, query]);
-  const options = useMemo(() => [{ family: "", displayName: "跟随排版" }, ...matches], [matches]);
+  const options = useMemo(() => [{ family: "", displayName: defaultLabel }, ...matches], [matches, defaultLabel]);
   useEffect(() => { if (open) input.current?.focus(); }, [open]);
   useEffect(() => {
     if (!open) return;
@@ -41,7 +43,7 @@ export default function ReadingFontPicker({ label, value, fonts, loading, error,
   };
   return <div className="reading-font-picker" ref={root}>
     <span className="font-picker-label">{label}</span>
-    <button ref={trigger} type="button" className="reading-font-trigger" aria-label={`${label}字体`} aria-expanded={open} aria-haspopup="listbox" onClick={() => { setOpen((current) => !current); setQuery(""); setActive(Math.max(0, fonts.findIndex((font) => font.family === selected) + 1)); }}><span>{selected || "跟随排版"}</span><ChevronDown aria-hidden="true" /></button>
+    <button ref={trigger} type="button" className="reading-font-trigger" aria-label={`${label}字体`} aria-expanded={open} aria-haspopup="listbox" onClick={() => { setOpen((current) => !current); setQuery(""); setActive(Math.max(0, fonts.findIndex((font) => font.family === selected) + 1)); }}><span>{selected ? `${selected}${inheritedLabel ? ` · ${inheritedLabel}` : ""}` : defaultLabel}</span><ChevronDown aria-hidden="true" /></button>
     {open && <div className="reading-font-popover">
       <input ref={input} type="search" role="combobox" aria-label={`搜索${label}字体`} aria-autocomplete="list" aria-controls={`${id}-list`} aria-expanded="true" aria-activedescendant={`${id}-option-${active}`} value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} onKeyDown={(event) => {
         if (event.nativeEvent.isComposing || event.keyCode === 229) return;
@@ -56,7 +58,7 @@ export default function ReadingFontPicker({ label, value, fonts, loading, error,
       {error && <button type="button" className="font-picker-retry" onClick={onRetry}>重试</button>}
       <div id={`${id}-list`} className="reading-font-list" role="listbox" aria-label={`${label}字体选项`}>
         {!loading && options.map((font, index) => <button key={font.family || "default"} type="button" id={`${id}-option-${index}`} role="option" aria-selected={selected === font.family} className={index === active ? "active" : ""} onMouseEnter={() => setActive(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(font.family)}>
-          <span>{font.displayName || font.family || "跟随排版"}{font.displayName && font.displayName !== font.family && <small>{font.family}</small>}</span>{selected === font.family && <Check aria-hidden="true" />}
+          <span>{font.displayName || font.family || defaultLabel}{font.displayName && font.displayName !== font.family && <small>{font.family}</small>}</span>{selected === font.family && <Check aria-hidden="true" />}
         </button>)}
       </div>
     </div>}

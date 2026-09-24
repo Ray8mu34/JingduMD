@@ -9,7 +9,9 @@ const LATIN_UNICODE_RANGES = "U+0000-02FF,U+0370-03FF,U+1E00-1EFF,U+2000-206F,U+
 
 export type ReaderFontChoices = { chineseFont: string; latinFont: string; chineseHeadingFont: string; latinHeadingFont: string; headingFont: string; codeFont: string };
 
-export function readerFontCss(choices: ReaderFontChoices, fonts: SystemFont[] = []): string {
+export type LegacyHeadingInheritance = { cjk: boolean; latin: boolean; full: boolean };
+
+export function readerFontCss(choices: ReaderFontChoices, fonts: SystemFont[] = [], inherited: LegacyHeadingInheritance = { cjk: false, latin: false, full: false }): string {
   const rules: string[] = [];
   const catalog = new Map(fonts.map((font) => [font.family.toLocaleLowerCase(), font]));
   const add = (alias: string, family: string, coverage: "cjk" | "latin" | "all" = "all") => {
@@ -28,7 +30,11 @@ export function readerFontCss(choices: ReaderFontChoices, fonts: SystemFont[] = 
   add("JingReader Latin", choices.latinFont, "latin");
   add("JingReader Heading CJK", choices.chineseHeadingFont, "cjk");
   add("JingReader Heading Latin", choices.latinHeadingFont, "latin");
-  add("JingReader Heading", choices.headingFont);
+  if (inherited.full) add("JingReader Heading", choices.headingFont);
+  else {
+    if (inherited.cjk) add("JingReader Heading Legacy CJK", choices.headingFont, "cjk");
+    if (inherited.latin) add("JingReader Heading Legacy Latin", choices.headingFont, "latin");
+  }
   add("JingReader Code", choices.codeFont);
   return rules.join("\n");
 }

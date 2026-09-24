@@ -6,6 +6,12 @@ import { isDarkTheme, resolveReadingStyle } from "./readerPreferences";
 export function readerPresentation(preferences: ReaderPreferences, fonts: SystemFont[] = []) {
   const effective = resolveReadingStyle(preferences);
   const legacy = preferences.styleMode === "legacy";
+  const profileOverrides = preferences.typographyOverrides?.[preferences.typographyProfile] ?? {};
+  const inheritedHeading = {
+    cjk: !!effective.headingFont && (legacy ? !effective.chineseHeadingFont : profileOverrides.chineseHeadingFont === undefined),
+    latin: !!effective.headingFont && (legacy ? !effective.latinHeadingFont : profileOverrides.latinHeadingFont === undefined),
+    full: !!effective.headingFont && (legacy ? !effective.chineseHeadingFont && !effective.latinHeadingFont : profileOverrides.chineseHeadingFont === undefined && profileOverrides.latinHeadingFont === undefined)
+  };
   const serif = effective.fontFamily === "serif";
   const bodyFallback = serif
     ? legacy ? '"Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif' : 'Georgia, "Noto Serif SC", "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif'
@@ -19,7 +25,7 @@ export function readerPresentation(preferences: ReaderPreferences, fonts: System
     "--reader-size": `${effective.fontSize}px`, "--reader-leading": effective.lineHeight,
     "--reader-width": `${effective.contentWidth}px`, "--paragraph-space": `${effective.paragraphSpacing}em`,
     "--reader-font": [effective.chineseFont && '"JingReader CJK"', effective.latinFont && '"JingReader Latin"', bodyFallback].filter(Boolean).join(", "),
-    "--heading-font": [effective.chineseHeadingFont && '"JingReader Heading CJK"', effective.latinHeadingFont && '"JingReader Heading Latin"', effective.headingFont && '"JingReader Heading"', headingFallback].filter(Boolean).join(", "),
+    "--heading-font": [effective.chineseHeadingFont && '"JingReader Heading CJK"', effective.latinHeadingFont && '"JingReader Heading Latin"', inheritedHeading.full && '"JingReader Heading"', !inheritedHeading.full && inheritedHeading.cjk && '"JingReader Heading Legacy CJK"', !inheritedHeading.full && inheritedHeading.latin && '"JingReader Heading Legacy Latin"', headingFallback].filter(Boolean).join(", "),
     "--code-font": [effective.codeFont && '"JingReader Code"', '"Cascadia Code", "JetBrains Mono", Consolas, Menlo, monospace'].filter(Boolean).join(", "),
     "--heading-scale": effective.headingScale,
     "--heading-space": effective.headingDensity === "compact" ? .78 : effective.headingDensity === "airy" ? 1.2 : 1,
@@ -39,7 +45,7 @@ export function readerPresentation(preferences: ReaderPreferences, fonts: System
   ].filter(Boolean).join(" ");
   return {
     effective, style, classes,
-    fontCss: readerFontCss(effective, fonts),
+    fontCss: readerFontCss(effective, fonts, inheritedHeading),
     night: appearance ? appearance === "night" || appearance === "nord" : isDarkTheme(effective.theme)
   };
 }

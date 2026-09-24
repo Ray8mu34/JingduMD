@@ -15,8 +15,12 @@ describe("canonical typography roles", () => {
 
   it("honors explicit heading font overrides in either profile", () => {
     const value = { ...DEFAULT_PREFERENCES, typographyOverrides: { reading: { headingFont: "My Serif" }, study: { headingFont: "My Sans" } } };
-    expect(String(variable(readerPresentation(value), "--heading-font"))).toContain('"JingReader Heading CJK"');
+    expect(String(variable(readerPresentation(value), "--heading-font"))).toContain('"JingReader Heading"');
     expect(readerPresentation({ ...value, typographyProfile: "study" }).fontCss).toContain('local("My Sans")');
+    const resetChinese = { ...value, typographyOverrides: { ...value.typographyOverrides, reading: { headingFont: "My Serif", chineseHeadingFont: "" } } };
+    const resetStack = String(variable(readerPresentation(resetChinese), "--heading-font"));
+    expect(resetStack).not.toContain("JingReader Heading Legacy CJK");
+    expect(resetStack).toContain("JingReader Heading Legacy Latin");
   });
 
   it("keeps CJK and Latin heading choices separate across profiles", () => {

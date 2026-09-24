@@ -75,6 +75,33 @@ try {
   await page.waitForFunction(() => window.__JINGREADER_QA__.saves.at(-1)?.personalTypographies.some((item) => item.name === "双语标题"));
   const personal = await page.evaluate(() => window.__JINGREADER_QA__.saves.at(-1).personalTypographies.at(-1).overrides);
   assert(personal.chineseHeadingFont === "Microsoft YaHei" && personal.latinHeadingFont === "Arial", "personal typography omitted heading roles");
+  await page.evaluate(() => {
+    const current = window.__JINGREADER_QA__.saves.at(-1);
+    localStorage.setItem("jingreader-qa-preferences", JSON.stringify({ ...current, typographyOverrides: { ...current.typographyOverrides, reading: { headingFont: "Georgia" } } }));
+  });
+  await page.reload();
+  await heading.waitFor();
+  await page.getByRole("button", { name: "阅读设置" }).click();
+  await page.getByRole("button", { name: /详细排版/ }).click();
+  await page.getByRole("button", { name: "字体", exact: true }).click();
+  const oldChinese = page.locator(".reading-font-picker").filter({ hasText: "中文标题" });
+  assert((await oldChinese.getByRole("button", { name: "中文标题字体" }).textContent()).includes("旧标题设置"), "old unified font was presented as a new Chinese role");
+  await page.getByRole("button", { name: "段落", exact: true }).click();
+  await page.getByRole("button", { name: "个人排版" }).click();
+  await page.getByRole("button", { name: /另存当前排版/ }).click();
+  await page.getByRole("textbox", { name: "个人排版名称" }).fill("旧统一标题");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await page.waitForFunction(() => window.__JINGREADER_QA__.saves.at(-1)?.personalTypographies.some((item) => item.name === "旧统一标题"));
+  const inheritedPersonal = await page.evaluate(() => window.__JINGREADER_QA__.saves.at(-1).personalTypographies.at(-1).overrides);
+  assert(inheritedPersonal.headingFont === "Georgia" && inheritedPersonal.chineseHeadingFont === undefined && inheritedPersonal.latinHeadingFont === undefined, "personal typography copied the old Western face into new roles");
+  await page.getByRole("button", { name: "返回阅读设置" }).click();
+  await page.getByRole("button", { name: /详细排版/ }).click();
+  await page.getByRole("button", { name: "字体", exact: true }).click();
+  await oldChinese.getByRole("button", { name: "中文标题字体" }).click();
+  await oldChinese.getByRole("option", { name: "跟随排版" }).click();
+  await page.waitForFunction(() => window.__JINGREADER_QA__.saves.at(-1)?.typographyOverrides.reading.chineseHeadingFont === "");
+  const resetStack = await page.evaluate(() => getComputedStyle(document.querySelector(".markdown-body h2")).fontFamily);
+  assert(!resetStack.includes("JingReader Heading Legacy CJK") && resetStack.includes("JingReader Heading Legacy Latin"), "resetting one old heading role changed the other");
   console.log(JSON.stringify({ roles: labels, selected: [personal.chineseHeadingFont, personal.latinHeadingFont], bodyUnchanged: true, renderedFaces: ["SimSun", "Arial-BoldMT", "Arial-BoldItalicMT"], reload: true, personal: true }));
   await page.close();
 } finally { await browser.close(); await server.close(); }

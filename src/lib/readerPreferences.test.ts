@@ -92,16 +92,17 @@ describe("reader presets", () => {
   it("adapts an old unified heading choice without coupling later role changes", () => {
     const old = migratePreferences({ ...DEFAULT_PREFERENCES, typographyOverrides: { reading: { headingFont: "Georgia" }, study: {} } });
     const initial = resolveReadingStyle(old);
-    expect(initial.chineseHeadingFont).toBe("Georgia");
-    expect(initial.latinHeadingFont).toBe("Georgia");
+    expect(initial.chineseHeadingFont).toBe("");
+    expect(initial.latinHeadingFont).toBe("");
+    expect(initial.headingFont).toBe("Georgia");
     const changed = setTypographyOverride(old, "chineseHeadingFont", "SimSun");
     const effective = resolveReadingStyle(changed);
     expect(effective.chineseHeadingFont).toBe("SimSun");
-    expect(effective.latinHeadingFont).toBe("Georgia");
-    expect(effective.headingFont).toBe("");
+    expect(effective.latinHeadingFont).toBe("");
+    expect(effective.headingFont).toBe("Georgia");
     const reset = setTypographyOverride(changed, "chineseHeadingFont", "");
     expect(resolveReadingStyle(reset).chineseHeadingFont).toBe("");
-    expect(resolveReadingStyle(reset).latinHeadingFont).toBe("Georgia");
+    expect(resolveReadingStyle(reset).headingFont).toBe("Georgia");
   });
   it("changes only color selection for every legacy preset", () => {
     for (const preset of READER_PRESETS) {

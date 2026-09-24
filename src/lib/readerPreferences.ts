@@ -150,18 +150,10 @@ const appearanceThemes: Record<AppearanceId, ReaderThemeId> = { warm: "paper", w
 
 export function resolveReadingStyle(value: ReaderPreferences): ReaderPreferences {
   if (value.styleMode === "legacy") return value;
-  const overrides = value.typographyOverrides?.[value.typographyProfile] ?? {};
-  // Old unified heading choices remain effective until each role is explicitly changed.
-  const headings = overrides.headingFont ? {
-    headingFont: "",
-    chineseHeadingFont: overrides.chineseHeadingFont ?? overrides.headingFont,
-    latinHeadingFont: overrides.latinHeadingFont ?? overrides.headingFont
-  } : {};
   return {
     ...value,
     ...canonicalProfiles[value.typographyProfile],
-    ...overrides,
-    ...headings,
+    ...(value.typographyOverrides?.[value.typographyProfile] ?? {}),
     theme: appearanceThemes[value.appearance],
     fontSize: value.fontSize,
     imageBrightness: value.imageBrightness
