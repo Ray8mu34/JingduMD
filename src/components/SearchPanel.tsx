@@ -3,8 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { FileSearch, LoaderCircle, Search, X } from "lucide-react";
 import type { SearchResponse, SearchResult } from "../types";
+import { trapTab } from "../lib/focus";
 
-type Props = { root: string; onOpen: (path: string) => void; onOpenNew: (path: string) => void; onClose: () => void };
+type Props = { root: string; onOpen: (path: string, query: string) => void; onOpenNew: (path: string) => void; onClose: () => void };
 
 export default function SearchPanel({ root, onOpen, onOpenNew, onClose }: Props) {
   const [query, setQuery] = useState("");
@@ -35,14 +36,14 @@ export default function SearchPanel({ root, onOpen, onOpenNew, onClose }: Props)
   }, [query, root]);
 
   return <div className="modal-backdrop" onMouseDown={onClose}>
-    <section className="search-panel" onMouseDown={(e) => e.stopPropagation()} aria-label="全文搜索">
+    <section className="search-panel" onMouseDown={(e) => e.stopPropagation()} onKeyDown={trapTab} role="dialog" aria-modal="true" aria-label="全文搜索">
       <div className="search-input-row"><Search /><input ref={input} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索文件名与全文…" /><button onClick={onClose}><X /></button></div>
       <div className="search-results">
         {!loading && query && <div className="search-meta"><span>{mode === "scan" ? "短词逐文件扫描" : "中文子串索引"}</span>{partial && <strong>索引尚未完成，结果可能不完整</strong>}</div>}
         {loading && <div className="search-state"><LoaderCircle className="spin" />正在搜索</div>}
         {!loading && error && <div className="search-state"><FileSearch />搜索失败：{error}</div>}
         {!loading && !error && query && !results.length && <div className="search-state"><FileSearch />没有匹配结果</div>}
-        {results.map((result) => <button key={result.path} className="search-result" title={shortcutLabel("Ctrl+单击或 Ctrl+Enter：在新窗口打开")} onClick={(event) => { if (primaryModifier(event)) onOpenNew(result.path); else onOpen(result.path); onClose(); }} onKeyDown={(event) => { if (primaryModifier(event) && event.key === "Enter") { event.preventDefault(); onOpenNew(result.path); onClose(); } }}>
+        {results.map((result) => <button key={result.path} className="search-result" title={shortcutLabel("Ctrl+单击或 Ctrl+Enter：在新窗口打开")} onClick={(event) => { if (primaryModifier(event)) onOpenNew(result.path); else onOpen(result.path, query); onClose(); }} onKeyDown={(event) => { if (primaryModifier(event) && event.key === "Enter") { event.preventDefault(); onOpenNew(result.path); onClose(); } }}>
           <strong>{result.name}</strong><small>{result.path}</small><span>{result.snippet}</span>
         </button>)}
       </div>

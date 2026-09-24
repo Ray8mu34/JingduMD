@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
   Ban, BookOpenText, Check, Database, Eye, Palette, RefreshCw, RotateCcw,
   Save, Star, Type, X
 } from "lucide-react";
 import { filterSystemFonts, nextRecentFonts } from "../lib/fonts";
+import SimpleReadingSettings from "./SimpleReadingSettings";
 import {
   applyPreset, isPresetModified, matchingCustomProfile, READER_PRESETS, recipeFromPreferences
 } from "../lib/readerPreferences";
@@ -13,7 +14,7 @@ import type {
   ReadingRecipe, SystemFont
 } from "../types";
 
-type Props = { value: ReaderPreferences; root: string; onChange: (value: ReaderPreferences) => void; onClose: () => void };
+type Props = { value: ReaderPreferences; root: string; initialSection?: "reading" | "system"; sampleStyle?: CSSProperties; onChange: (value: ReaderPreferences) => void; onClose: () => void; onPreviewStart?: () => void; onPreviewEnd?: () => void };
 type Tab = "presets" | "typography" | "content" | "system";
 
 function formatBytes(value: number): string {
@@ -22,8 +23,15 @@ function formatBytes(value: number): string {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function SettingsPanel({ value, root, onChange, onClose }: Props) {
-  const [tab, setTab] = useState<Tab>("presets");
+export default function SettingsPanel(props: Props) {
+  const [legacyEditor, setLegacyEditor] = useState(props.initialSection === "system");
+  const initialValue = useRef(props.value);
+  return legacyEditor ? <LegacySettingsPanel {...props} initialTab={props.initialSection === "system" ? "system" : "presets"} onClose={() => { if (props.initialSection === "system") props.onClose(); else setLegacyEditor(false); }} />
+    : <SimpleReadingSettings value={props.value} initialValue={initialValue.current} sampleStyle={props.sampleStyle} onChange={props.onChange} onClose={props.onClose} onLegacyEdit={() => setLegacyEditor(true)} onPreviewStart={props.onPreviewStart ?? (() => undefined)} onPreviewEnd={props.onPreviewEnd ?? (() => undefined)} />;
+}
+
+function LegacySettingsPanel({ value, root, onChange, onClose, initialTab = "presets" }: Props & { initialTab?: Tab }) {
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [fonts, setFonts] = useState<SystemFont[]>([]);
   const [fontError, setFontError] = useState("");
   const [showAllFonts, setShowAllFonts] = useState(false);
@@ -41,11 +49,11 @@ export default function SettingsPanel({ value, root, onChange, onClose }: Props)
   });
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() || tab !== "typography") return;
     invoke<SystemFont[]>("list_system_fonts")
       .then((items) => setFonts(items.sort((left, right) => left.family.localeCompare(right.family, "zh-CN"))))
       .catch((error) => setFontError(String(error)));
-  }, []);
+  }, [tab]);
 
   const refreshDiagnostics = () => isTauri() && invoke<IndexDiagnostics>("get_index_diagnostics").then(setDiagnostics).catch(() => undefined);
   useEffect(() => { void refreshDiagnostics(); }, [root]);
@@ -121,7 +129,7 @@ export default function SettingsPanel({ value, root, onChange, onClose }: Props)
   const allFontNames = fonts.map((font) => font.family);
 
   return <aside className="settings-sheet" aria-label="阅读设置">
-    <div className="settings-title"><div><span>READING STUDIO</span><h2>阅读设置</h2></div><button onClick={onClose} title="关闭"><X /></button></div>
+    <div className="settings-title"><div><h2>原有样式编辑</h2></div><button onClick={onClose} title="返回阅读设置"><X /></button></div>
     <nav className="settings-tabs" aria-label="设置分类">
       <button className={tab === "presets" ? "active" : ""} onClick={() => setTab("presets")}><Palette />预设</button>
       <button className={tab === "typography" ? "active" : ""} onClick={() => setTab("typography")}><Type />排版</button>
@@ -142,8 +150,8 @@ export default function SettingsPanel({ value, root, onChange, onClose }: Props)
       </div>
       <div className="preset-actions">
         <div><strong>{activeCustom?.name ?? READER_PRESETS.find((item) => item.id === value.theme)?.name}</strong><span>{activeCustom ? "个人样式" : modified ? "已在预设基础上微调" : "当前使用完整预设"}</span></div>
-        <button onClick={() => onChange(applyPreset(value, value.theme))} disabled={!modified} title="恢复当前内置预设"><RotateCcw /></button>
-        <button onClick={saveCustomProfile} title="把当前设置保存为个人样式"><Save /></button>
+        <button onClick={() => onChange(applyPreset(value, value.theme))} disabled={!modified}>恢复此原有样式</button>
+        <button onClick={saveCustomProfile}>保存个人样式</button>
       </div>
       {!!value.customProfiles.length && <section className="custom-profiles">
         <div className="section-heading"><strong>我的样式</strong><span>保存在 AppData</span></div>
