@@ -2,10 +2,10 @@ import { primaryModifier, shortcutLabel } from "../lib/platform";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { AppWindow, ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
+import { AppWindow, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, Search } from "lucide-react";
 import type { DirectoryEntry } from "../types";
 
-type Props = { root: string; selected: string | null; onOpen: (path: string) => void; onOpenNew: (path: string) => void };
+type Props = { root: string; selected: string | null; onOpen: (path: string) => void; onOpenNew: (path: string) => void; onSearch?: () => void; onChooseFolder?: () => void };
 
 function TreeNode({ entry, selected, onOpen, onOpenNew, expandedPaths }: { entry: DirectoryEntry; selected: string | null; onOpen: (path: string) => void; onOpenNew: (path: string) => void; expandedPaths: Set<string> }) {
   const [expanded, setExpanded] = useState(expandedPaths.has(entry.path));
@@ -45,7 +45,7 @@ function TreeNode({ entry, selected, onOpen, onOpenNew, expandedPaths }: { entry
   </div>;
 }
 
-export default function FileTree({ root, selected, onOpen, onOpenNew }: Props) {
+export default function FileTree({ root, selected, onOpen, onOpenNew, onSearch, onChooseFolder }: Props) {
   const [entries, setEntries] = useState<DirectoryEntry[]>([]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
@@ -57,7 +57,10 @@ export default function FileTree({ root, selected, onOpen, onOpenNew }: Props) {
     ]).then(([items, expanded]) => { setEntries(items); setExpandedPaths(new Set(expanded)); }).catch((e) => setError(String(e)));
   }, [root]);
   return <nav className="file-tree" aria-label="文件树">
-    <div className="sidebar-heading"><FolderOpen /> <span title={root}>{root.split(/[\\/]/).pop()}</span></div>
+    <div className="sidebar-heading"><FolderOpen /> <span className="folder-name" title={root}>{root.split(/[\\/]/).pop()}</span>
+      {onSearch && <button className="folder-search-button" onClick={onSearch} title="搜索文件夹 (Ctrl+P)" aria-label="搜索文件夹"><Search /></button>}
+      {onChooseFolder && <button onClick={onChooseFolder} title="更换文件夹" aria-label="更换文件夹"><FolderOpen /></button>}
+    </div>
     {error && <div className="error-card">{error}</div>}
     {entries.map((entry) => <TreeNode key={entry.path} entry={entry} selected={selected} onOpen={onOpen} onOpenNew={onOpenNew} expandedPaths={expandedPaths} />)}
   </nav>;
