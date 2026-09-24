@@ -5,6 +5,7 @@ describe("system font CSS", () => {
     const css = readerFontCss("Microsoft YaHei UI", "Georgia", "Segoe UI", "Cascadia Code");
     expect(css).toContain('local("Microsoft YaHei UI")');
     expect(css).toContain("unicode-range:U+2E80-2EFF");
+    expect(css).toContain("U+FF00-FFEF");
     expect(css).toContain('local("Georgia")');
     expect(css).toContain('font-family:"JingReader Heading"');
     expect(css).toContain('local("Cascadia Code")');

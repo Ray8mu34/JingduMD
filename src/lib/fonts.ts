@@ -3,7 +3,7 @@ import type { SystemFont } from "../types";
 const CJK_UNICODE_RANGES = [
   "U+2E80-2EFF", "U+3000-303F", "U+3040-30FF", "U+3100-312F",
   "U+31A0-31BF", "U+31C0-31EF", "U+3400-4DBF", "U+4E00-9FFF",
-  "U+F900-FAFF", "U+20000-2FA1F"
+  "U+F900-FAFF", "U+20000-2FA1F", "U+FF00-FFEF"
 ].join(",");
 
 export function readerFontCss(chineseFont: string, latinFont: string, headingFont = "", codeFont = ""): string {
