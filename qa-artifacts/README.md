@@ -10,6 +10,8 @@
 
 本里程碑自动检查：`pnpm test` 59 项、`pnpm build`、Rust `cargo test` 18 项、`pnpm qa:interaction`、`pnpm qa:shell`、`pnpm qa:settings`、`pnpm qa:legacy`、`pnpm qa:layout`、`pnpm qa:print` 均通过。浏览器检查不等于 Windows 原生窗口或 macOS 结果；人工设计验收仍待完成，随后进入 U4 连续正文校样。
 
+Windows 桌面补查：`5a943ed` 通过 `pnpm tauri build --no-bundle` 生成 `src-tauri/target/release/jingreader.exe`。确认实际运行进程来自这个路径；原生窗口能打开已有 Markdown、展示正文与大纲，Aa 快捷浮层可打开，点回正文后关闭。该可执行文件未安装到 `C:\Program Files\JingReader`，系统中原有安装版仍是旧构建。标题栏拖动/双击、系统打印对话框和多窗口广播尚未在本轮桌面检查中完成；macOS 也未实测。
+
 基线为 `8fb3d80`；截图来自 Windows 上的 Edge 浏览器，视口截图为 1100 × 900 CSS px（设置面板另有 760px 视口）。`before-*.png` 是基线版本的 11 种旧主题，`after-legacy-*.png` 是兼容路径，同名文件可逐一比较。`after-reading-*.png` 与 `after-study-*.png` 覆盖两套新排版和四种外观；`after-settings-*.png` 包含一级与高级设置。`print-page-1.png`、`print-page-2.png` 是长内容打印校样。扩展样张保留了基线样张的开头，又增加了后续验收内容，因此旧版与新版截图可比较共同的开头区域。
 
 固定样张在 `fixtures/`：`plain-article.md`、`reader-showcase.md`、`anonymous-timeline.md`、`readme-sample.md`、`delayed-long.md`。`sample-*.png` 是五类样张的阅读/暖纸校样。浏览器样张入口为 `qa.html`。
