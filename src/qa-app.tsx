@@ -24,9 +24,13 @@ const positionWrites: string[] = [];
 const positionReadFailures = new Set<string>();
 const positionReadDelays = new Map<string, number>();
 const documentReadDelays = new Map<string, number>();
-const qaFonts = [{ family: "Arial", displayName: "Arial（本地化）", aliases: ["ArialMT"], supportsCjk: false, supportsLatin: true },
+const qaFonts = [{ family: "Arial", displayName: "Arial（本地化）", aliases: ["ArialMT"], faces: { regular: "Arial", bold: "Arial Bold", italic: "Arial Italic", boldItalic: "Arial Bold Italic" }, supportsCjk: false, supportsLatin: true },
   { family: "Noto Serif SC", displayName: "思源宋体", aliases: ["NotoSerifSC-Regular"], supportsCjk: true, supportsLatin: true },
-  ...Array.from({ length: 54 }, (_, index) => ({ family: `Sample Font ${String(index + 1).padStart(2, "0")}`, displayName: `样张字体 ${index + 1}`, aliases: [], supportsCjk: index % 2 === 0, supportsLatin: true }))];
+  ...Array.from({ length: 54 }, (_, index) => index === 0
+    ? { family: "SimSun", displayName: "宋体", aliases: [], supportsCjk: true, supportsLatin: true }
+    : index === 1
+      ? { family: "Microsoft YaHei", displayName: "微软雅黑", aliases: [], supportsCjk: true, supportsLatin: true }
+      : { family: `Sample Font ${String(index + 1).padStart(2, "0")}`, displayName: `样张字体 ${index + 1}`, aliases: [], supportsCjk: index % 2 === 0, supportsLatin: true })];
 const state = { saves: [] as ReaderPreferences[], calls: [] as string[], fontCalls: 0, fonts: qaFonts, fontFailures: 0, positions, positionWrites, positionReadFailures, positionReadDelays, documentReadDelays, selected: paths[names.indexOf(requested ?? "")] ?? paths[0],
   emitPreferences(preferences: ReaderPreferences) {
     const handler = listeners.get("preferences-updated");

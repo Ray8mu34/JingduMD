@@ -89,6 +89,20 @@ describe("reader presets", () => {
     expect(resolveReadingStyle(chooseTypographyProfile(chooseTypographyProfile(changed, "study"), "reading")).chineseFont).toBe("SimSun");
     expect(changed.remoteImagePolicy).toBe("ask");
   });
+  it("adapts an old unified heading choice without coupling later role changes", () => {
+    const old = migratePreferences({ ...DEFAULT_PREFERENCES, typographyOverrides: { reading: { headingFont: "Georgia" }, study: {} } });
+    const initial = resolveReadingStyle(old);
+    expect(initial.chineseHeadingFont).toBe("Georgia");
+    expect(initial.latinHeadingFont).toBe("Georgia");
+    const changed = setTypographyOverride(old, "chineseHeadingFont", "SimSun");
+    const effective = resolveReadingStyle(changed);
+    expect(effective.chineseHeadingFont).toBe("SimSun");
+    expect(effective.latinHeadingFont).toBe("Georgia");
+    expect(effective.headingFont).toBe("");
+    const reset = setTypographyOverride(changed, "chineseHeadingFont", "");
+    expect(resolveReadingStyle(reset).chineseHeadingFont).toBe("");
+    expect(resolveReadingStyle(reset).latinHeadingFont).toBe("Georgia");
+  });
   it("changes only color selection for every legacy preset", () => {
     for (const preset of READER_PRESETS) {
       const original = { ...applyPreset(DEFAULT_PREFERENCES, preset.id), chineseFont: "SimSun", imageBrightness: 67 };

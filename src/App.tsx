@@ -20,15 +20,16 @@ import {
   scrollToHighlight, selectionToHighlight
 } from "./lib/highlights";
 import { readerPresentation } from "./lib/readerPresentation";
+import { loadFontCatalog } from "./lib/fontCatalog";
 import { extractOutline } from "./lib/markdown";
-import { migratePreferences } from "./lib/readerPreferences";
+import { migratePreferences, resolveReadingStyle } from "./lib/readerPreferences";
 import { formatModifiedTime, readingMetrics } from "./lib/reading";
 import { captureTextAnchor, restoreTextAnchor, type TextAnchor } from "./lib/readingAnchor";
 import { handleMenuKeys, trapTab } from "./lib/focus";
 import { useOutsideDismiss } from "./lib/useOutsideDismiss";
 import type {
   DocumentPayload, ExternalChangeEvent, HighlightColor, IndexStatus, NewTextHighlight, OpenTarget,
-  ReaderPreferences, ReadingPosition, RecentRoot, ResolvedHighlight, TextHighlight
+  ReaderPreferences, ReadingPosition, RecentRoot, ResolvedHighlight, SystemFont, TextHighlight
 } from "./types";
 import { DEFAULT_PREFERENCES } from "./types";
 
@@ -70,6 +71,7 @@ export default function App() {
   const [root, setRoot] = useState("");
   const [doc, setDoc] = useState<DocumentPayload | null>(null);
   const [preferences, setPreferences] = useState<ReaderPreferences>(DEFAULT_PREFERENCES);
+  const [fontCatalog, setFontCatalog] = useState<SystemFont[]>([]);
   const [showTree, setShowTree] = useState(savedWindowState?.showTree ?? DEFAULT_PREFERENCES.showTree);
   const [showOutline, setShowOutline] = useState(savedWindowState?.showOutline ?? DEFAULT_PREFERENCES.showOutline);
   const [narrow, setNarrow] = useState(() => window.innerWidth < 900);
@@ -255,6 +257,10 @@ export default function App() {
   const exportPdf = useCallback(async () => {
     if (!documentRef.current) return;
     preserveAnchor();
+    const resolved = resolveReadingStyle(preferences);
+    if ([resolved.chineseFont, resolved.latinFont, resolved.chineseHeadingFont, resolved.latinHeadingFont, resolved.headingFont, resolved.codeFont].some(Boolean)) {
+      try { setFontCatalog(await loadFontCatalog()); } catch { /* keep the configured family fallback */ }
+    }
     const folds = [...document.querySelectorAll<HTMLButtonElement>(".section-fold-button,.code-block-toolbar button,.callout-heading,.image-actions button[title='折叠图片']")]
       .filter((button) => button.getAttribute("aria-expanded") === "false");
     window.dispatchEvent(new Event("jingreader:expand-for-print"));
@@ -279,7 +285,7 @@ export default function App() {
       else window.print();
     } catch (error) { notify(`无法打开打印窗口：${errorText(error)}`); }
     finally { restore(); }
-  }, [notify, preferences.pdfIncludeHighlights, preferences.pdfStyle, preserveAnchor]);
+  }, [notify, preferences, preserveAnchor]);
 
   const refreshRecentRoots = useCallback(() => {
     if (!isTauri()) return;
@@ -544,6 +550,16 @@ export default function App() {
 
   useEffect(() => {
     if (!preferencesReady) return;
+    const { chineseFont, latinFont, chineseHeadingFont, latinHeadingFont, headingFont, codeFont } = preferences;
+    const overrideFonts = Object.values(preferences.typographyOverrides).flatMap((item) => [item.chineseFont, item.latinFont, item.chineseHeadingFont, item.latinHeadingFont, item.headingFont, item.codeFont]);
+    if (![chineseFont, latinFont, chineseHeadingFont, latinHeadingFont, headingFont, codeFont, ...overrideFonts].some(Boolean)) return;
+    let active = true;
+    void loadFontCatalog().then((fonts) => { if (active) setFontCatalog(fonts); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [preferencesReady, preferences]);
+
+  useEffect(() => {
+    if (!preferencesReady) return;
     try { localStorage.setItem(windowStateKey, JSON.stringify({ showTree, showOutline })); } catch { /* storage unavailable */ }
   }, [preferencesReady, showTree, showOutline, windowStateKey]);
 
@@ -722,7 +738,7 @@ export default function App() {
     void appWindow.toggleMaximize().then(() => appWindow.isMaximized()).then(setWindowMaximized);
   };
   const closeWindow = () => { if (isTauri()) void getCurrentWindow().close(); };
-  const presentation = readerPresentation(preferences);
+  const presentation = readerPresentation(preferences, fontCatalog);
   const { effective, style: readerStyle } = presentation;
   const sidebarsHidden = focusMode;
   const modalOpen = searchOpen || printOptionsOpen;

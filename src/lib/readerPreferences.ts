@@ -143,17 +143,25 @@ export function applyPreset(current: ReaderPreferences, id: ReaderThemeId): Read
 }
 
 const canonicalProfiles: Record<TypographyProfileId, TypographyOverride> = {
-  reading: { lineHeight: 1.85, contentWidth: 760, paragraphSpacing: .88, headingDensity: "balanced", headingScale: .95, fontFamily: "serif", quoteStyle: "bar", tableStyle: "plain", imageStyle: "plain", paragraphStyle: "spacing", firstLineIndent: 2, textAlign: "left", letterSpacing: 0, codeWrap: false, codeScale: .84, formulaScale: 1, chineseFont: "", latinFont: "", headingFont: "", codeFont: "" },
-  study: { lineHeight: 1.78, contentWidth: 760, paragraphSpacing: .66, headingDensity: "compact", headingScale: .91, fontFamily: "serif", quoteStyle: "bar", tableStyle: "plain", imageStyle: "plain", paragraphStyle: "spacing", firstLineIndent: 2, textAlign: "left", letterSpacing: 0, codeWrap: false, codeScale: .84, formulaScale: 1, chineseFont: "", latinFont: "", headingFont: "", codeFont: "" }
+  reading: { lineHeight: 1.85, contentWidth: 760, paragraphSpacing: .88, headingDensity: "balanced", headingScale: .95, fontFamily: "serif", quoteStyle: "bar", tableStyle: "plain", imageStyle: "plain", paragraphStyle: "spacing", firstLineIndent: 2, textAlign: "left", letterSpacing: 0, codeWrap: false, codeScale: .84, formulaScale: 1, chineseFont: "", latinFont: "", chineseHeadingFont: "", latinHeadingFont: "", headingFont: "", codeFont: "" },
+  study: { lineHeight: 1.78, contentWidth: 760, paragraphSpacing: .66, headingDensity: "compact", headingScale: .91, fontFamily: "serif", quoteStyle: "bar", tableStyle: "plain", imageStyle: "plain", paragraphStyle: "spacing", firstLineIndent: 2, textAlign: "left", letterSpacing: 0, codeWrap: false, codeScale: .84, formulaScale: 1, chineseFont: "", latinFont: "", chineseHeadingFont: "", latinHeadingFont: "", headingFont: "", codeFont: "" }
 };
 const appearanceThemes: Record<AppearanceId, ReaderThemeId> = { warm: "paper", white: "paper", night: "night", nord: "nord" };
 
 export function resolveReadingStyle(value: ReaderPreferences): ReaderPreferences {
   if (value.styleMode === "legacy") return value;
+  const overrides = value.typographyOverrides?.[value.typographyProfile] ?? {};
+  // Old unified heading choices remain effective until each role is explicitly changed.
+  const headings = overrides.headingFont ? {
+    headingFont: "",
+    chineseHeadingFont: overrides.chineseHeadingFont ?? overrides.headingFont,
+    latinHeadingFont: overrides.latinHeadingFont ?? overrides.headingFont
+  } : {};
   return {
     ...value,
     ...canonicalProfiles[value.typographyProfile],
-    ...(value.typographyOverrides?.[value.typographyProfile] ?? {}),
+    ...overrides,
+    ...headings,
     theme: appearanceThemes[value.appearance],
     fontSize: value.fontSize,
     imageBrightness: value.imageBrightness

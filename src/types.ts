@@ -4,7 +4,15 @@ export type OutlineItem = { level: number; text: string; id: string };
 export type DocumentPayload = { path: string; name: string; content: string; modifiedMs: number; size: number };
 export type SearchResult = { path: string; name: string; snippet: string; score: number };
 export type SearchResponse = { results: SearchResult[]; partial: boolean; mode: "empty" | "index" | "scan" };
-export type SystemFont = { family: string; displayName?: string; aliases?: string[]; supportsCjk: boolean; supportsLatin: boolean };
+export type FontFaces = { regular?: string; bold?: string; italic?: string; boldItalic?: string };
+export type SystemFont = { family: string; displayName?: string; aliases?: string[]; faces?: FontFaces; supportsCjk: boolean; supportsLatin: boolean };
+export const FONT_ROLES = [
+  { key: "chineseFont", label: "中文正文", coverage: "cjk" },
+  { key: "latinFont", label: "西文正文", coverage: "latin" },
+  { key: "chineseHeadingFont", label: "中文标题", coverage: "cjk" },
+  { key: "latinHeadingFont", label: "西文标题", coverage: "latin" },
+  { key: "codeFont", label: "代码", coverage: "latin" }
+] as const;
 
 export type ReaderThemeId =
   | "paper" | "humanist" | "chinese" | "editorial" | "swiss"
@@ -51,7 +59,7 @@ export type TypographyOverride = Partial<Pick<ReadingRecipe,
   "lineHeight" | "contentWidth" | "paragraphSpacing" | "fontFamily" | "headingFont" | "codeFont" |
   "headingScale" | "headingDensity" | "paragraphStyle" | "firstLineIndent" | "textAlign" |
   "letterSpacing" | "quoteStyle" | "tableStyle" | "codeWrap" | "codeScale" | "formulaScale" | "imageStyle"
->> & { chineseFont?: string; latinFont?: string };
+>> & { chineseFont?: string; latinFont?: string; chineseHeadingFont?: string; latinHeadingFont?: string };
 export type PersonalTypography = { id: string; name: string; profile: TypographyProfileId; overrides: TypographyOverride };
 
 export type ReaderPreferences = ReadingRecipe & {
@@ -64,6 +72,8 @@ export type ReaderPreferences = ReadingRecipe & {
   personalTypographies: PersonalTypography[];
   chineseFont: string;
   latinFont: string;
+  chineseHeadingFont: string;
+  latinHeadingFont: string;
   showTree: boolean;
   showOutline: boolean;
   readingRuler: boolean;
@@ -105,7 +115,7 @@ export const DEFAULT_PREFERENCES: ReaderPreferences = {
   personalTypographies: [],
   theme: "paper", fontSize: 18.5, lineHeight: 1.82, contentWidth: 780,
   paragraphSpacing: 0.85, fontFamily: "serif", showTree: false,
-  chineseFont: "", latinFont: "", showOutline: false, readingRuler: false,
+  chineseFont: "", latinFont: "", chineseHeadingFont: "", latinHeadingFont: "", showOutline: false, readingRuler: false,
   headingFont: "", codeFont: "", headingScale: 1, headingDensity: "balanced",
   paragraphStyle: "spacing", firstLineIndent: 2, textAlign: "left", letterSpacing: 0,
   quoteStyle: "bar", tableStyle: "plain", codeWrap: false, codeScale: 0.84,

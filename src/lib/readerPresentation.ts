@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react";
-import type { ReaderPreferences } from "../types";
+import type { ReaderPreferences, SystemFont } from "../types";
 import { readerFontCss } from "./fonts";
 import { isDarkTheme, resolveReadingStyle } from "./readerPreferences";
 
-export function readerPresentation(preferences: ReaderPreferences) {
+export function readerPresentation(preferences: ReaderPreferences, fonts: SystemFont[] = []) {
   const effective = resolveReadingStyle(preferences);
   const legacy = preferences.styleMode === "legacy";
   const serif = effective.fontFamily === "serif";
@@ -19,7 +19,7 @@ export function readerPresentation(preferences: ReaderPreferences) {
     "--reader-size": `${effective.fontSize}px`, "--reader-leading": effective.lineHeight,
     "--reader-width": `${effective.contentWidth}px`, "--paragraph-space": `${effective.paragraphSpacing}em`,
     "--reader-font": [effective.chineseFont && '"JingReader CJK"', effective.latinFont && '"JingReader Latin"', bodyFallback].filter(Boolean).join(", "),
-    "--heading-font": [effective.headingFont && '"JingReader Heading"', headingFallback].filter(Boolean).join(", "),
+    "--heading-font": [effective.chineseHeadingFont && '"JingReader Heading CJK"', effective.latinHeadingFont && '"JingReader Heading Latin"', effective.headingFont && '"JingReader Heading"', headingFallback].filter(Boolean).join(", "),
     "--code-font": [effective.codeFont && '"JingReader Code"', '"Cascadia Code", "JetBrains Mono", Consolas, Menlo, monospace'].filter(Boolean).join(", "),
     "--heading-scale": effective.headingScale,
     "--heading-space": effective.headingDensity === "compact" ? .78 : effective.headingDensity === "airy" ? 1.2 : 1,
@@ -39,7 +39,7 @@ export function readerPresentation(preferences: ReaderPreferences) {
   ].filter(Boolean).join(" ");
   return {
     effective, style, classes,
-    fontCss: readerFontCss(effective.chineseFont, effective.latinFont, effective.headingFont, effective.codeFont),
+    fontCss: readerFontCss(effective, fonts),
     night: appearance ? appearance === "night" || appearance === "nord" : isDarkTheme(effective.theme)
   };
 }

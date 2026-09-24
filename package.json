@@ -19,6 +19,7 @@
     "qa:typography": "node scripts/qa-typography.mjs",
     "qa:position": "node scripts/qa-position.mjs",
     "qa:font-picker": "node scripts/qa-font-picker.mjs",
+    "qa:heading-fonts": "node scripts/qa-heading-fonts.mjs",
     "tauri": "tauri",
     "release:macos": "node scripts/release-macos.mjs"
   },

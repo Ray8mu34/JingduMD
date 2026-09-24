@@ -142,6 +142,8 @@ struct ReaderPreferences {
     font_family: String,
     chinese_font: String,
     latin_font: String,
+    chinese_heading_font: String,
+    latin_heading_font: String,
     heading_font: String,
     code_font: String,
     heading_scale: f64,
@@ -192,6 +194,8 @@ impl Default for ReaderPreferences {
             font_family: "serif".to_owned(),
             chinese_font: String::new(),
             latin_font: String::new(),
+            chinese_heading_font: String::new(),
+            latin_heading_font: String::new(),
             heading_font: String::new(),
             code_font: String::new(),
             heading_scale: 1.0,
@@ -233,10 +237,20 @@ struct PreferencesChanged {
     preferences: ReaderPreferences,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FontFaces {
+    regular: Option<String>,
+    bold: Option<String>,
+    italic: Option<String>,
+    bold_italic: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SystemFont {
     family: String,
+    faces: Option<FontFaces>,
     supports_cjk: bool,
     supports_latin: bool,
 }
@@ -1836,6 +1850,33 @@ unsafe extern "system" fn collect_font_family(
     1
 }
 
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn collect_font_face(
+    logfont: *const windows_sys::Win32::Graphics::Gdi::LOGFONTW,
+    _metric: *const windows_sys::Win32::Graphics::Gdi::TEXTMETRICW,
+    font_type: u32,
+    data: isize,
+) -> i32 {
+    use windows_sys::Win32::Graphics::Gdi::{ENUMLOGFONTEXW, TRUETYPE_FONTTYPE};
+    if logfont.is_null() || data == 0 || font_type & TRUETYPE_FONTTYPE == 0 { return 1; }
+    let face = &*(logfont as *const ENUMLOGFONTEXW);
+    let full = &face.elfFullName;
+    let length = full.iter().position(|value| *value == 0).unwrap_or(full.len());
+    let name = String::from_utf16_lossy(&full[..length]).trim().to_owned();
+    if name.is_empty() { return 1; }
+    let faces = &mut *(data as *mut FontFaces);
+    let bold = face.elfLogFont.lfWeight >= 600;
+    let italic = face.elfLogFont.lfItalic != 0;
+    let slot = match (bold, italic) {
+        (false, false) => &mut faces.regular,
+        (true, false) => &mut faces.bold,
+        (false, true) => &mut faces.italic,
+        (true, true) => &mut faces.bold_italic,
+    };
+    if slot.is_none() { *slot = Some(name); }
+    1
+}
+
 #[tauri::command]
 #[cfg(target_os = "windows")]
 fn list_system_fonts() -> Result<Vec<SystemFont>, String> {
@@ -1915,8 +1956,14 @@ fn list_system_fonts() -> Result<Vec<SystemFont>, String> {
         .map(|family| {
             let supports_cjk = unsafe { supports_sample(device, &family, "中文阅读漢字", 4) };
             let supports_latin = unsafe { supports_sample(device, &family, "AaZz09", 6) };
+            let mut face_request: LOGFONTW = unsafe { std::mem::zeroed() };
+            face_request.lfCharSet = DEFAULT_CHARSET;
+            for (target, unit) in face_request.lfFaceName.iter_mut().zip(family.encode_utf16()) { *target = unit; }
+            let mut faces = FontFaces::default();
+            unsafe { EnumFontFamiliesExW(device, &face_request, Some(collect_font_face), &mut faces as *mut FontFaces as isize, 0); }
             SystemFont {
                 family,
+                faces: if faces.regular.is_some() || faces.bold.is_some() || faces.italic.is_some() || faces.bold_italic.is_some() { Some(faces) } else { None },
                 supports_cjk,
                 supports_latin,
             }
@@ -1962,6 +2009,7 @@ fn list_system_fonts() -> Result<Vec<SystemFont>, String> {
                 supports_cjk: supports(&face, "中文阅读漢字", 4),
                 supports_latin: supports(&face, "AaZz09", 6),
                 family,
+                faces: None,
             });
         }
     }
@@ -2573,7 +2621,9 @@ mod tests {
         preferences.typography_profile = "study".into();
         preferences.appearance = "nord".into();
         preferences.legacy_appearance = Some("night".into());
-        preferences.typography_overrides = serde_json::json!({"reading":{"chineseFont":"Noto Serif SC","latinFont":"Georgia","headingFont":"Georgia","codeFont":"Consolas"},"study":{"lineHeight":1.9}});
+        preferences.chinese_heading_font = "SimSun".into();
+        preferences.latin_heading_font = "Georgia".into();
+        preferences.typography_overrides = serde_json::json!({"reading":{"chineseFont":"Noto Serif SC","latinFont":"Georgia","chineseHeadingFont":"SimSun","latinHeadingFont":"Georgia","codeFont":"Consolas"},"study":{"lineHeight":1.9}});
         let persisted = serde_json::to_string(&preferences).unwrap();
         let loaded: ReaderPreferences = serde_json::from_str(&persisted).unwrap();
         assert_eq!(loaded.schema_version, 2);
@@ -2581,6 +2631,9 @@ mod tests {
         assert_eq!(loaded.legacy_appearance.as_deref(), Some("night"));
         assert_eq!(loaded.typography_profile, "study");
         assert_eq!(loaded.typography_overrides["reading"]["chineseFont"], "Noto Serif SC");
+        assert_eq!(loaded.chinese_heading_font, "SimSun");
+        assert_eq!(loaded.latin_heading_font, "Georgia");
+        assert_eq!(loaded.typography_overrides["reading"]["latinHeadingFont"], "Georgia");
         assert_eq!(loaded.typography_overrides["study"]["lineHeight"], 1.9);
     }
     #[cfg(target_os = "windows")]
@@ -2591,5 +2644,12 @@ mod tests {
         assert!(fonts.iter().all(|font| !font.family.starts_with('@')));
         assert!(fonts.iter().any(|font| font.supports_latin));
         assert!(fonts.iter().any(|font| font.supports_cjk));
+        if let Some(arial) = fonts.iter().find(|font| font.family == "Arial") {
+            let faces = arial.faces.as_ref().expect("Arial face metadata");
+            assert!(faces.regular.is_some());
+            assert!(faces.bold.is_some());
+            assert!(faces.italic.is_some());
+            assert!(faces.bold_italic.is_some());
+        }
     }
 }

@@ -15,7 +15,19 @@ describe("canonical typography roles", () => {
 
   it("honors explicit heading font overrides in either profile", () => {
     const value = { ...DEFAULT_PREFERENCES, typographyOverrides: { reading: { headingFont: "My Serif" }, study: { headingFont: "My Sans" } } };
-    expect(String(variable(readerPresentation(value), "--heading-font"))).toContain('"JingReader Heading"');
+    expect(String(variable(readerPresentation(value), "--heading-font"))).toContain('"JingReader Heading CJK"');
     expect(readerPresentation({ ...value, typographyProfile: "study" }).fontCss).toContain('local("My Sans")');
+  });
+
+  it("keeps CJK and Latin heading choices separate across profiles", () => {
+    const reading = { ...DEFAULT_PREFERENCES, typographyOverrides: { reading: { chineseHeadingFont: "Noto Serif SC", latinHeadingFont: "Georgia" }, study: { chineseHeadingFont: "Noto Sans SC", latinHeadingFont: "Segoe UI" } } };
+    const first = readerPresentation(reading);
+    const second = readerPresentation({ ...reading, typographyProfile: "study" });
+    expect(first.fontCss).toContain('font-family:"JingReader Heading CJK";src:local("Noto Serif SC")');
+    expect(first.fontCss).toContain('font-family:"JingReader Heading Latin";src:local("Georgia")');
+    expect(second.fontCss).toContain('font-family:"JingReader Heading CJK";src:local("Noto Sans SC")');
+    expect(second.fontCss).toContain('font-family:"JingReader Heading Latin";src:local("Segoe UI")');
+    expect(variable(first, "--reader-font")).toBe(variable(second, "--reader-font"));
+    expect(variable(first, "--code-font")).toBe(variable(second, "--code-font"));
   });
 });
