@@ -5,9 +5,8 @@ import katex from "katex";
 import type { CSSProperties } from "react";
 import type { AppearanceId, ReaderPreferences, SystemFont, TypographyProfileId } from "../types";
 import { applyPreset, chooseAppearance, chooseTypographyProfile, READER_PRESETS, resolveReadingStyle, setTypographyOverride } from "../lib/readerPreferences";
-import { trapTab } from "../lib/focus";
 
-type Props = { value: ReaderPreferences; initialValue: ReaderPreferences; sampleStyle?: CSSProperties; onChange: (value: ReaderPreferences) => void; onClose: () => void; onLegacyEdit: () => void; onPreviewStart: () => void; onPreviewEnd: () => void };
+type Props = { value: ReaderPreferences; initialValue: ReaderPreferences; sampleStyle?: CSSProperties; onChange: (value: ReaderPreferences) => void; onClose: (reason?: "button" | "tab") => void; onLegacyEdit: () => void; onPreviewStart: () => void; onPreviewEnd: () => void };
 const appearances: [AppearanceId, string][] = [["warm", "暖纸"], ["white", "素白"], ["night", "静谧夜读"], ["nord", "Nord 极夜"]];
 
 export default function SimpleReadingSettings({ value, initialValue, sampleStyle, onChange, onClose, onLegacyEdit, onPreviewStart, onPreviewEnd }: Props) {
@@ -52,8 +51,8 @@ export default function SimpleReadingSettings({ value, initialValue, sampleStyle
     }] });
     setName("");
   };
-  return <aside ref={panel} className="settings-sheet simple-settings" role="dialog" aria-modal="true" aria-label="阅读设置" onKeyDown={trapTab}>
-    <div className="settings-title"><div><h2>阅读设置</h2><small>选择后立即应用并自动保存</small></div><button onClick={onClose} aria-label="关闭阅读设置"><X /></button></div>
+  return <aside ref={panel} className="settings-sheet simple-settings" role="dialog" aria-label="阅读设置" onBlur={(event) => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) onClose("tab"); }}>
+    <div className="settings-title"><div><h2>阅读设置</h2><small>选择后立即应用并自动保存</small></div><button onClick={() => onClose("button")} aria-label="关闭阅读设置"><X /></button></div>
     {value.styleMode === "legacy" && <div className="legacy-notice">当前保留原有样式：{READER_PRESETS.find((item) => item.id === value.theme)?.name ?? value.theme}。选择下方排版或外观后启用新版阅读样式。</div>}
     <div className="simple-settings-body">
       <section><h3>排版</h3><div className="simple-choice">{(["reading", "study"] as TypographyProfileId[]).map((profile) => <button key={profile} className={value.styleMode === "canonical" && value.typographyProfile === profile ? "active" : ""} onClick={() => onChange(chooseTypographyProfile(value, profile))}><strong>{profile === "reading" ? "阅读" : "研读"}</strong><small>{profile === "reading" ? "舒展的长文节奏" : "紧凑的章节与推导"}</small></button>)}</div></section>

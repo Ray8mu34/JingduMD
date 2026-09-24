@@ -24,7 +24,8 @@ import { extractOutline } from "./lib/markdown";
 import { isDarkTheme, migratePreferences, resolveReadingStyle } from "./lib/readerPreferences";
 import { formatModifiedTime, readingMetrics } from "./lib/reading";
 import { captureTextAnchor, restoreTextAnchor, type TextAnchor } from "./lib/readingAnchor";
-import { trapTab } from "./lib/focus";
+import { handleMenuKeys, trapTab } from "./lib/focus";
+import { useOutsideDismiss } from "./lib/useOutsideDismiss";
 import type {
   DocumentPayload, ExternalChangeEvent, HighlightColor, IndexStatus, NewTextHighlight, OpenTarget,
   ReaderPreferences, ReadingPosition, RecentRoot, ResolvedHighlight, TextHighlight
@@ -85,6 +86,11 @@ export default function App() {
   const settingsTrigger = useRef<HTMLButtonElement>(null);
   const navigationTrigger = useRef<HTMLButtonElement>(null);
   const moreTrigger = useRef<HTMLButtonElement>(null);
+  const navigationMenu = useRef<HTMLDivElement>(null);
+  const moreMenu = useRef<HTMLDivElement>(null);
+  const settingsLayer = useRef<HTMLDivElement>(null);
+  const topbarRef = useRef<HTMLElement>(null);
+  const workspaceRef = useRef<HTMLElement>(null);
   const saveTimer = useRef<number>();
   const telemetryFrame = useRef<number>();
   const initialized = useRef(false);
@@ -110,6 +116,39 @@ export default function App() {
     const anchor = scrollRef.current && captureTextAnchor(scrollRef.current);
     if (path && anchor) pendingAnchor.current = { path, anchor };
   }, []);
+
+  const endPreferencesPreview = useCallback(() => {
+    if (!previewingPreferences.current) return;
+    previewingPreferences.current = false;
+    setPreferenceCommitVersion((value) => value + 1);
+  }, []);
+  const closeSettings = useCallback((reason: "escape" | "button" | "toggle" | "outside" | "tab" | "switch") => {
+    endPreferencesPreview();
+    setSettingsOpen(false);
+    if (reason === "escape" || reason === "button" || reason === "toggle") {
+      requestAnimationFrame(() => (settingsSection === "system" ? moreTrigger : settingsTrigger).current?.focus());
+    }
+  }, [endPreferencesPreview, settingsSection]);
+  useOutsideDismiss(navigationOpen, [navigationTrigger, navigationMenu], () => setNavigationOpen(false), true);
+  useOutsideDismiss(moreOpen, [moreTrigger, moreMenu], () => setMoreOpen(false), true);
+  useOutsideDismiss(settingsOpen, [settingsTrigger, settingsLayer], () => closeSettings("outside"));
+  useEffect(() => {
+    if (navigationOpen) navigationMenu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
+  }, [navigationOpen]);
+  useEffect(() => {
+    if (moreOpen) moreMenu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
+  }, [moreOpen]);
+  useEffect(() => {
+    if (!settingsOpen) return;
+    window.addEventListener("pointerup", endPreferencesPreview, true);
+    window.addEventListener("pointercancel", endPreferencesPreview, true);
+    window.addEventListener("blur", endPreferencesPreview);
+    return () => {
+      window.removeEventListener("pointerup", endPreferencesPreview, true);
+      window.removeEventListener("pointercancel", endPreferencesPreview, true);
+      window.removeEventListener("blur", endPreferencesPreview);
+    };
+  }, [endPreferencesPreview, settingsOpen]);
 
   const notify = useCallback((value: string) => {
     setMessage(value);
@@ -493,10 +532,11 @@ export default function App() {
       if (primaryModifier(event) && event.shiftKey && event.key.toLowerCase() === "o") { preserveAnchor(); setShowOutline((value) => !value); }
       if (event.key === "F11") { event.preventDefault(); void getCurrentWindow().isFullscreen().then((yes) => getCurrentWindow().setFullscreen(!yes)); }
       if (event.key === "Escape") {
+        if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
         if (document.querySelector(".image-lightbox")) return;
-        if (highlightPopover) { setHighlightPopover(null); moreTrigger.current?.focus(); return; }
-        if (printOptionsOpen) { setPrintOptionsOpen(false); moreTrigger.current?.focus(); return; }
-        if (settingsOpen) { setSettingsOpen(false); (settingsSection === "system" ? moreTrigger : settingsTrigger).current?.focus(); }
+        if (highlightPopover) { event.preventDefault(); setHighlightPopover(null); moreTrigger.current?.focus(); return; }
+        if (printOptionsOpen) { event.preventDefault(); setPrintOptionsOpen(false); moreTrigger.current?.focus(); return; }
+        if (settingsOpen) { event.preventDefault(); closeSettings("escape"); }
         else if (searchOpen) setSearchOpen(false);
         else if (findOpen) setFindOpen(false);
         else if (moreOpen) { setMoreOpen(false); moreTrigger.current?.focus(); }
@@ -505,7 +545,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [chooseFile, findOpen, highlightPopover, isMainWindow, moreOpen, navigateHistory, navigationOpen, printOptionsOpen, root, searchOpen, settingsOpen, settingsSection]);
+  }, [chooseFile, closeSettings, findOpen, highlightPopover, isMainWindow, moreOpen, navigateHistory, navigationOpen, printOptionsOpen, root, searchOpen, settingsOpen]);
 
   useEffect(() => {
     clearFindHighlights();
@@ -615,6 +655,11 @@ export default function App() {
     "--formula-scale": `${effective.formulaScale}em`, "--image-brightness": `${effective.imageBrightness}%`
   } as React.CSSProperties;
   const sidebarsHidden = focusMode;
+  const modalOpen = searchOpen || printOptionsOpen;
+  useEffect(() => {
+    if (topbarRef.current) topbarRef.current.inert = modalOpen;
+    if (workspaceRef.current) workspaceRef.current.inert = modalOpen;
+  }, [modalOpen]);
   void historyVersion;
 
   const readingClasses = [
@@ -630,7 +675,7 @@ export default function App() {
 
   return <div className={readingClasses}>
     <style>{readerFontCss(effective.chineseFont, effective.latinFont, effective.headingFont, effective.codeFont)}</style>
-    <header className="topbar" data-tauri-drag-region>
+    <header ref={topbarRef} className="topbar" data-tauri-drag-region>
       <div className="brand" data-tauri-drag-region><BookOpen /><span data-tauri-drag-region>静读 Markdown</span></div>
       <button onClick={() => navigateHistory("back")} disabled={!backHistory.current.length} title="后退 (Alt+←)"><ArrowLeft /></button>
       <button onClick={() => navigateHistory("forward")} disabled={!forwardHistory.current.length} title="前进 (Alt+→)"><ArrowRight /></button>
@@ -638,13 +683,13 @@ export default function App() {
       <div className="document-title" data-tauri-drag-region title={doc?.path}>{doc?.name ?? (root || "不接管目录的长文阅读器")}</div>
       {indexStatus?.running && <div className="index-progress"><span>{indexStatus.phase === "rebuild" ? "重建" : "索引"} {indexStatus.indexed}/{indexStatus.total || "?"}</span><button onClick={() => void invoke("cancel_index")} title="取消索引"><Ban /></button></div>}
       <button disabled={!root} onClick={() => setSearchOpen(true)} title={shortcutLabel("全文搜索 (Ctrl+P)")}><Search /></button>
-      <div className="toolbar-menu-wrap"><button ref={navigationTrigger} aria-label="导航" aria-expanded={navigationOpen} onClick={() => { setNavigationOpen((open) => !open); setMoreOpen(false); }}><Menu /></button>{navigationOpen && <div className="toolbar-menu" role="menu">
+      <div className="toolbar-menu-wrap"><button ref={navigationTrigger} aria-label="导航" aria-haspopup="menu" aria-controls="navigation-menu" aria-expanded={navigationOpen} onClick={() => { if (settingsOpen) closeSettings("switch"); setNavigationOpen((open) => !open); setMoreOpen(false); }} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setNavigationOpen(true); setMoreOpen(false); } }}><Menu /></button>{navigationOpen && <div ref={navigationMenu} id="navigation-menu" className="toolbar-menu" role="menu" aria-label="导航操作" onKeyDown={(event) => handleMenuKeys(event, (reason) => { setNavigationOpen(false); if (reason === "escape") navigationTrigger.current?.focus(); })}>
         <button role="menuitem" onClick={() => { treeTemporary.current = false; preserveAnchor(); setShowTree((value) => !value); setNavigationOpen(false); navigationTrigger.current?.focus(); }}><PanelLeftClose />{showTree ? "收起文件列表" : "固定文件列表"}</button>
         <button role="menuitem" disabled={!doc} onClick={() => { preserveAnchor(); setRightTab("outline"); setShowOutline((value) => !value); setNavigationOpen(false); navigationTrigger.current?.focus(); }}><PanelRightClose />{showOutline ? "收起大纲" : "打开大纲"}</button>
         <button role="menuitem" disabled={!doc} onClick={() => { preserveAnchor(); setRightTab("highlights"); setShowOutline(true); setNavigationOpen(false); navigationTrigger.current?.focus(); }}><Highlighter />高亮记录</button>
       </div>}</div>
-      <button ref={settingsTrigger} onClick={() => { setSettingsSection("reading"); setSettingsOpen(true); }} title={shortcutLabel("阅读设置 (Ctrl+,)")}><Settings /></button>
-      <div className="toolbar-menu-wrap"><button ref={moreTrigger} aria-label="更多" aria-expanded={moreOpen} onClick={() => { setMoreOpen((open) => !open); setNavigationOpen(false); }}><MoreHorizontal /></button>{moreOpen && <div className="toolbar-menu" role="menu">
+      <button ref={settingsTrigger} aria-expanded={settingsOpen && settingsSection === "reading"} onClick={() => { if (settingsOpen && settingsSection === "reading") closeSettings("toggle"); else { if (settingsOpen) closeSettings("switch"); setSettingsSection("reading"); setSettingsOpen(true); setNavigationOpen(false); setMoreOpen(false); } }} title={shortcutLabel("阅读设置 (Ctrl+,)")}><Settings /></button>
+      <div className="toolbar-menu-wrap"><button ref={moreTrigger} aria-label="更多" aria-haspopup="menu" aria-controls="more-menu" aria-expanded={moreOpen} onClick={() => { if (settingsOpen) closeSettings("switch"); setMoreOpen((open) => !open); setNavigationOpen(false); }} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setMoreOpen(true); setNavigationOpen(false); } }}><MoreHorizontal /></button>{moreOpen && <div ref={moreMenu} id="more-menu" className="toolbar-menu" role="menu" aria-label="更多操作" onKeyDown={(event) => handleMenuKeys(event, (reason) => { setMoreOpen(false); if (reason === "escape") moreTrigger.current?.focus(); })}>
         <button role="menuitem" onClick={() => { void chooseFolder(); setMoreOpen(false); }}><FolderOpen />打开文件夹</button>
         <button role="menuitem" disabled={!doc} onClick={() => { if (doc) openDocumentInNewWindow(doc.path); setMoreOpen(false); }}><AppWindow />在新窗口打开</button>
         <button role="menuitem" disabled={!doc} onClick={() => { setPrintOptionsOpen(true); setMoreOpen(false); }}><Printer />打印或导出 PDF</button>
@@ -661,7 +706,7 @@ export default function App() {
       </div>}
     </header>
 
-    <main className="workspace">
+    <main ref={workspaceRef} className="workspace">
       {!sidebarsHidden && showTree && root && <aside className="left-sidebar"><FileTree key={`${root}:${treeVersion}`} root={root} selected={doc?.path ?? null} onOpen={openDocument} onOpenNew={openDocumentInNewWindow} /></aside>}
       <section className="reader-pane">
         {doc && <div className="reading-progress-track" aria-label={`阅读进度 ${Math.round(readingProgress * 100)}%`}><span style={{ width: `${readingProgress * 100}%` }} /></div>}
@@ -703,7 +748,7 @@ export default function App() {
     {!showTree && !focusMode && root && <button className="edge-toggle left" onClick={() => { preserveAnchor(); setShowTree(true); }} aria-label="打开文件列表"><ChevronRight /></button>}
     {!showOutline && !focusMode && doc && outline.length > 1 && <button className="edge-toggle right" onClick={() => { preserveAnchor(); setShowOutline(true); }} aria-label="打开大纲"><ChevronLeft /></button>}
     {searchOpen && root && <SearchPanel root={root} onOpen={(path, query) => { pendingSearch.current = query; setFindQuery(query); setFindOpen(true); openDocument(path); }} onOpenNew={openDocumentInNewWindow} onClose={() => setSearchOpen(false)} />}
-    {settingsOpen && <SettingsPanel value={preferences} root={root} initialSection={settingsSection} sampleStyle={readerStyle} onChange={updatePreferences} onPreviewStart={() => { previewingPreferences.current = true; }} onPreviewEnd={() => { if (previewingPreferences.current) { previewingPreferences.current = false; setPreferenceCommitVersion((value) => value + 1); } }} onClose={() => { if (previewingPreferences.current) { previewingPreferences.current = false; setPreferenceCommitVersion((value) => value + 1); } setSettingsOpen(false); (settingsSection === "system" ? moreTrigger : settingsTrigger).current?.focus(); }} />}
+    {settingsOpen && <div ref={settingsLayer}><SettingsPanel value={preferences} root={root} initialSection={settingsSection} sampleStyle={readerStyle} onChange={updatePreferences} onPreviewStart={() => { previewingPreferences.current = true; }} onPreviewEnd={endPreferencesPreview} onClose={(reason) => closeSettings(reason ?? "button")} /></div>}
     {printOptionsOpen && <div className="modal-backdrop" onMouseDown={() => { setPrintOptionsOpen(false); moreTrigger.current?.focus(); }}><section className="print-options-panel" role="dialog" aria-modal="true" aria-label="打印选项" onMouseDown={(event) => event.stopPropagation()} onKeyDown={trapTab}>
       <div className="settings-title"><h2>打印选项</h2><button onClick={() => { setPrintOptionsOpen(false); moreTrigger.current?.focus(); }} aria-label="关闭打印选项"><X /></button></div>
       <label>页面外观<select autoFocus value={preferences.pdfStyle} onChange={(event) => updatePreferences({ ...preferences, pdfStyle: event.target.value as ReaderPreferences["pdfStyle"] })}><option value="paper">清晰白纸</option><option value="current">沿用当前阅读外观</option></select></label>

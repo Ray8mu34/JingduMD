@@ -370,7 +370,7 @@ button { color: inherit; }
 .recent-roots > button span, .recent-roots > button small { margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .recent-roots > button span { color: var(--heading); font-weight: 600; }
 
-.modal-backdrop { position: fixed; inset: 48px 0 0; z-index: 20; background: rgba(18, 20, 22, .36); display: flex; justify-content: center; padding-top: 8vh; -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
+.modal-backdrop { position: fixed; inset: 0; z-index: 20; background: rgba(18, 20, 22, .36); display: flex; justify-content: center; padding-top: max(8vh, 64px); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
 .search-panel { width: min(720px, calc(100vw - 40px)); height: min(620px, 75vh); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: 0 22px 70px rgba(0, 0, 0, .32); display: grid; grid-template-rows: 54px 1fr; }
 .print-options-panel { width: min(360px, calc(100vw - 40px)); height: max-content; padding: 0 20px 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 22px 70px rgba(0,0,0,.3); }
 .print-options-panel .settings-title { padding: 16px 0; margin: 0; }

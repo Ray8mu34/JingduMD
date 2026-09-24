@@ -14,7 +14,7 @@ import type {
   ReadingRecipe, SystemFont
 } from "../types";
 
-type Props = { value: ReaderPreferences; root: string; initialSection?: "reading" | "system"; sampleStyle?: CSSProperties; onChange: (value: ReaderPreferences) => void; onClose: () => void; onPreviewStart?: () => void; onPreviewEnd?: () => void };
+type Props = { value: ReaderPreferences; root: string; initialSection?: "reading" | "system"; sampleStyle?: CSSProperties; onChange: (value: ReaderPreferences) => void; onClose: (reason?: "button" | "tab") => void; onPreviewStart?: () => void; onPreviewEnd?: () => void };
 type Tab = "presets" | "typography" | "content" | "system";
 
 function formatBytes(value: number): string {
@@ -129,7 +129,7 @@ function LegacySettingsPanel({ value, root, onChange, onClose, initialTab = "pre
   const allFontNames = fonts.map((font) => font.family);
 
   return <aside className="settings-sheet" aria-label="阅读设置">
-    <div className="settings-title"><div><h2>原有样式编辑</h2></div><button onClick={onClose} title="返回阅读设置"><X /></button></div>
+    <div className="settings-title"><div><h2>原有样式编辑</h2></div><button onClick={() => onClose("button")} title="返回阅读设置"><X /></button></div>
     <nav className="settings-tabs" aria-label="设置分类">
       <button className={tab === "presets" ? "active" : ""} onClick={() => setTab("presets")}><Palette />预设</button>
       <button className={tab === "typography" ? "active" : ""} onClick={() => setTab("typography")}><Type />排版</button>
