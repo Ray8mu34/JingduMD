@@ -14,7 +14,7 @@ Windows 桌面补查：`5a943ed` 通过 `pnpm tauri build --no-bundle` 生成 `s
 
 ## 连续正文与技术章节校样（U4）
 
-排版改动提交为 `402d834`。`u4-before-*` 取自 `f5f7cf2`，`u4-after-*` 取自 `402d834`；每组有首屏和正文中段，技术样张另有代码、宽表与窄窗截图。校样源为 `fixtures/typography-proof.md`、普通文章和五类匿名样张。两套排版使用同一份内容、`styleMode=canonical`、`appearance=warm`；阅读采用衬线正文与衬线标题，研读采用相同正文与无衬线标题。四种外观的几何一致性另由 `pnpm qa:layout` 检查。
+排版改动提交为 `402d834`。`u4-before-*` 取自 `f5f7cf2`，`u4-after-*` 由包含相同排版代码的 `276db28` 生成；每组有首屏和正文中段，技术样张另有代码、宽表与窄窗截图。校样源为 `fixtures/typography-proof.md`、普通文章和五类匿名样张。两套排版使用同一份内容、`styleMode=canonical`、`appearance=warm`；阅读采用衬线正文与衬线标题，研读采用相同正文与无衬线标题。四种外观的几何一致性另由 `pnpm qa:layout` 检查。
 
 `pnpm qa:typography` 在 Windows Edge 上以 1100 × 900 CSS px 检查六份样张 × 两套排版 × 模拟设备缩放 1／1.25／1.5；技术样张还检查 760 × 900 CSS px。当前 Windows 的 `AppliedDPI=144`（系统显示缩放 150%）；脚本中的 100%／125%／150% 是浏览器模拟 deviceScaleFactor，**不是切换 Windows 显示缩放后的三次原生窗口测试**。运行数据、提交号和所用配置见 `u4-before-metrics.json`、`u4-after-metrics.json`。
 
