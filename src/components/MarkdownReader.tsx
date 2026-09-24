@@ -128,11 +128,11 @@ function LocalImage({ documentPath, source, alt, remotePolicy, allowedRemoteHost
   </span>;
 }
 
-function CollapsibleCodeBlock({ children, language, lines }: { children: ReactNode; language: string; lines: number }) {
+function CollapsibleCodeBlock({ children, language, lines, wide }: { children: ReactNode; language: string; lines: number; wide: boolean }) {
   const [collapsed, setCollapsed] = useState(false);
   const label = language || "代码";
   useEffect(() => { const expand = () => setCollapsed(false); window.addEventListener("jingreader:expand-for-print", expand); return () => window.removeEventListener("jingreader:expand-for-print", expand); }, []);
-  return <div className={`code-block ${collapsed ? "is-collapsed" : ""}`}>
+  return <div className={`code-block ${wide ? "is-wide" : ""} ${collapsed ? "is-collapsed" : ""}`}>
     <div className="code-block-toolbar"><span><Code2 />{label}<small>{lines} 行</small></span><button type="button" onClick={() => setCollapsed((value) => !value)} aria-expanded={!collapsed} title={collapsed ? "展开代码块" : "折叠代码块"}>{collapsed ? <ChevronRight /> : <ChevronDown />}{collapsed ? "展开" : "折叠"}</button></div>
     {!collapsed && <pre role="region" aria-label={`${label}代码，可横向滚动`} tabIndex={0}>{children}</pre>}
   </div>;
@@ -204,7 +204,8 @@ function MarkdownPre({ children }: { children?: ReactNode }) {
   if (className.includes("math-") || className.includes("language-mermaid")) return <>{children}</>;
   const language = /language-([^\s]+)/.exec(className)?.[1] ?? "";
   const value = String(props?.children ?? "").replace(/\n$/, "");
-  return <CollapsibleCodeBlock language={language} lines={Math.max(1, value.split("\n").length)}>{children}</CollapsibleCodeBlock>;
+  const lines = value.split("\n");
+  return <CollapsibleCodeBlock language={language} lines={Math.max(1, lines.length)} wide={lines.some((line) => [...line].length > 72)}>{children}</CollapsibleCodeBlock>;
 }
 
 function ScrollableTable({ children }: { children?: ReactNode }) {
@@ -260,7 +261,7 @@ function LazyMath({ source, display, loadMargin }: { source: string; display: bo
       setHtml(katex.renderToString(source, { displayMode: display, throwOnError: false, strict: "warn", trust: false }));
     });
   }, [display, source, visible]);
-  return <span ref={ref} className={display ? "lazy-math math-display" : "lazy-math math-inline"}
+  return <span ref={ref} className={display ? `lazy-math math-display ${source.length > 90 ? "is-wide" : ""}` : "lazy-math math-inline"}
     {...(display ? { role: "region", "aria-label": "数学公式，可横向滚动", tabIndex: 0 } : {})}
     {...(html ? { dangerouslySetInnerHTML: { __html: html } } : {})}>{html ? undefined : source}</span>;
 }
@@ -305,7 +306,7 @@ function MermaidBlock({ source, night, loadMargin }: { source: string; night: bo
     });
     return () => { active = false; };
   }, [source, visible, night]);
-  return <div ref={ref} className="mermaid-block" role="region" aria-label="Mermaid 图表，可横向滚动" tabIndex={0}>
+  return <div ref={ref} className={`mermaid-block ${svg.width && svg.width > 720 ? "is-wide" : ""}`} role="region" aria-label="Mermaid 图表，可横向滚动" tabIndex={0}>
     {svg.markup ? <div className="mermaid-canvas" style={svg.width ? { width: `${svg.width}px` } : undefined} dangerouslySetInnerHTML={{ __html: svg.markup }} />
       : error ? <pre className="diagram-error">{error}</pre> : "图表加载中…"}
   </div>;

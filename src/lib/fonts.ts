@@ -8,10 +8,11 @@ const CJK_UNICODE_RANGES = [
 
 export function readerFontCss(chineseFont: string, latinFont: string, headingFont = "", codeFont = ""): string {
   const rules: string[] = [];
-  if (chineseFont) rules.push(`@font-face{font-family:"JingReader CJK";src:local(${JSON.stringify(chineseFont)});unicode-range:${CJK_UNICODE_RANGES};font-display:swap;}`);
-  if (latinFont) rules.push(`@font-face{font-family:"JingReader Latin";src:local(${JSON.stringify(latinFont)});font-display:swap;}`);
-  if (headingFont) rules.push(`@font-face{font-family:"JingReader Heading";src:local(${JSON.stringify(headingFont)});font-display:swap;}`);
-  if (codeFont) rules.push(`@font-face{font-family:"JingReader Code";src:local(${JSON.stringify(codeFont)});font-display:swap;}`);
+  const regular = "font-weight:400;font-style:normal;";
+  if (chineseFont) rules.push(`@font-face{font-family:"JingReader CJK";src:local(${JSON.stringify(chineseFont)});${regular}unicode-range:${CJK_UNICODE_RANGES};font-display:swap;}`);
+  if (latinFont) rules.push(`@font-face{font-family:"JingReader Latin";src:local(${JSON.stringify(latinFont)});${regular}font-display:swap;}`);
+  if (headingFont) rules.push(`@font-face{font-family:"JingReader Heading";src:local(${JSON.stringify(headingFont)});${regular}font-display:swap;}`);
+  if (codeFont) rules.push(`@font-face{font-family:"JingReader Code";src:local(${JSON.stringify(codeFont)});${regular}font-display:swap;}`);
   return rules.join("\n");
 }
 

@@ -9,6 +9,8 @@ describe("system font CSS", () => {
     expect(css).toContain('local("Georgia")');
     expect(css).toContain('font-family:"JingReader Heading"');
     expect(css).toContain('local("Cascadia Code")');
+    expect(css).toContain("font-weight:400;font-style:normal");
+    expect(css).not.toContain("font-weight:100 900");
   });
 
   it("does not create aliases for system defaults", () => {

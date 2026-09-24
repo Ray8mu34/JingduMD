@@ -16,6 +16,7 @@
     "qa:navigation": "node scripts/qa-navigation.mjs",
     "qa:interaction": "node scripts/qa-interaction.mjs",
     "qa:shell": "node scripts/qa-shell.mjs",
+    "qa:typography": "node scripts/qa-typography.mjs",
     "tauri": "tauri",
     "release:macos": "node scripts/release-macos.mjs"
   },

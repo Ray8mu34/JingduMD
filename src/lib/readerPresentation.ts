@@ -11,7 +11,9 @@ export function readerPresentation(preferences: ReaderPreferences) {
     ? legacy ? '"Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif' : 'Georgia, "Noto Serif SC", "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif'
     : legacy ? '"Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif' : '"Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif';
   const headingFallback = serif
-    ? legacy ? 'Georgia, "Noto Serif CJK SC", "Songti SC", serif' : 'Georgia, "Noto Serif SC", "Noto Serif CJK SC", "Songti SC", serif'
+    ? legacy ? 'Georgia, "Noto Serif CJK SC", "Songti SC", serif'
+      : preferences.typographyProfile === "study" ? '"Segoe UI", "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif'
+        : 'Georgia, "Noto Serif SC", "Noto Serif CJK SC", "Songti SC", serif'
     : legacy ? 'Inter, "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif' : 'Inter, "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif';
   const style = {
     "--reader-size": `${effective.fontSize}px`, "--reader-leading": effective.lineHeight,

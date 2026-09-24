@@ -551,17 +551,19 @@ button { color: inherit; }
 }
 
 /* Canonical reading styles share geometry across all four appearances. */
-.style-canonical .markdown-body :is(h1,h2,h3,h4,h5,h6) { font-weight: 650; letter-spacing: -.012em; overflow-wrap: break-word; }
-.style-canonical .markdown-body h1 { font-size: calc(1.75em * var(--heading-scale)); margin-bottom: .8em; }
-.style-canonical .markdown-body h2 { font-size: calc(1.42em * var(--heading-scale)); margin-top: 2em; margin-bottom: .65em; border-bottom: 0; padding: 0; }
-.style-canonical .markdown-body h3 { font-size: calc(1.19em * var(--heading-scale)); margin-top: 1.6em; margin-bottom: .55em; }
-.style-canonical .markdown-body h4 { font-size: 1.05em; margin-top: 1.4em; margin-bottom: .45em; }
-.style-canonical .markdown-body h5 { font-size: 1em; margin-top: 1.25em; margin-bottom: .35em; }
-.style-canonical .markdown-body h6 { font-size: .94em; margin-top: 1.2em; margin-bottom: .3em; }
-.style-canonical .markdown-body :is(h1,h2,h3,h4,h5,h6) + :is(p,.lazy-math,.code-block,.table-frame) { margin-top: .3em; }
-.style-canonical .markdown-body p:has(+ .math-display) { margin-bottom: .35em; }
-.style-canonical .markdown-body .math-display + p { margin-top: .25em; }
-.style-canonical .markdown-body > :is(.table-frame,.code-block,.mermaid-block,.math-display) { position: relative; left: 50%; transform: translateX(-50%); width: min(calc(100% + 180px), calc(100cqw - 36px)); max-width: none; }
+.style-canonical .markdown-body :is(h1,h2,h3,h4,h5,h6) { font-weight: 640; letter-spacing: 0; overflow-wrap: break-word; }
+.style-canonical .markdown-body h1 { font-size: calc(1.75em * var(--heading-scale)); margin-bottom: .7em; }
+.style-canonical .markdown-body h2 { font-size: calc(1.42em * var(--heading-scale)); margin-top: 2em; margin-bottom: .6em; border-bottom: 0; padding: 0; }
+.style-canonical .markdown-body h3 { font-size: calc(1.19em * var(--heading-scale)); margin-top: 1.65em; margin-bottom: .52em; }
+.style-canonical .markdown-body h4 { font-size: 1.06em; margin-top: 1.45em; margin-bottom: .4em; }
+.style-canonical .markdown-body h5 { font-size: 1.02em; margin-top: 1.3em; margin-bottom: .34em; }
+.style-canonical .markdown-body h6 { font-size: .96em; margin-top: 1.2em; margin-bottom: .3em; }
+.style-canonical .markdown-body :is(h1,h2,h3,h4,h5,h6) + :is(p,.lazy-math,.code-block,.table-frame) { margin-top: 0; }
+.style-canonical .markdown-body p:has(+ .math-display) { margin-bottom: .25em; }
+.style-canonical .markdown-body .math-display + p { margin-top: .15em; }
+.style-canonical .markdown-body .lazy-math.math-display { margin: .35em 0 .3em; padding: .1em 0; }
+.style-canonical .markdown-body .lazy-math.math-display .katex-display { margin: 0; padding: .1em 0; }
+.style-canonical .markdown-body > :is(.table-frame:has(table tr > :nth-child(6)),.code-block.is-wide,.mermaid-block.is-wide,.math-display.is-wide) { position: relative; left: 50%; transform: translateX(-50%); width: min(calc(100% + 180px), calc(100cqw - 36px)); max-width: none; }
 .style-canonical .markdown-body blockquote { padding: .1em 0 .1em 1em; background: transparent; border-left: 2px solid var(--accent); color: var(--text); font-style: normal; }
 .style-canonical .markdown-body img { max-height: none; border-radius: 0; box-shadow: none; filter: brightness(var(--image-brightness, 100%)); }
 .style-canonical .image-frame { background: transparent; }
@@ -569,8 +571,11 @@ button { color: inherit; }
 .style-canonical .code-block:not(:hover):not(:focus-within) .code-block-toolbar button { opacity: 0; }
 .style-canonical .code-block .code-block-toolbar button:focus-visible { opacity: 1; }
 .style-canonical .code-block:not(:hover):not(:focus-within) .code-block-toolbar { border-bottom-color: transparent; }
-.style-canonical.profile-study .markdown-body :is(h2,h3,h4,h5,h6) { font-weight: 700; }
-.style-canonical.profile-study .markdown-body :is(.math-display,.code-block,.table-frame) { margin-top: .9em; margin-bottom: .9em; }
+.style-canonical.profile-reading .markdown-body :is(h1,h2,h3,h4,h5,h6) { font-weight: 630; }
+.style-canonical.profile-study .markdown-body :is(h1,h2,h3,h4,h5,h6) { font-weight: 650; }
+.style-canonical.profile-study .markdown-body h2 { margin-top: 2.2em; }
+.style-canonical.profile-study .markdown-body :is(.code-block,.table-frame) { margin-top: 1em; margin-bottom: 1em; }
+.style-canonical.profile-study .markdown-body .lazy-math.math-display { margin-top: .28em; margin-bottom: .26em; }
 .style-canonical.paragraph-indent .markdown-body > p { text-indent: 0; }
 .style-canonical.paragraph-indent .markdown-body > p + p { text-indent: var(--first-line-indent, 2em); }
 
