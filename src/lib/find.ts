@@ -59,5 +59,7 @@ export function clearFindHighlights(): void {
 export function scrollToRange(range: Range | undefined): void {
   if (!range) return;
   const element = range.startContainer.parentElement;
-  element?.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (!element) return;
+  window.dispatchEvent(new CustomEvent("jingreader:reveal-heading", { detail: element }));
+  requestAnimationFrame(() => requestAnimationFrame(() => element.scrollIntoView({ behavior: "smooth", block: "center" })));
 }

@@ -1,6 +1,11 @@
 import type { Root, Text, Link, Heading, PhrasingContent, Blockquote, Paragraph } from "mdast";
 import { visit } from "unist-util-visit";
 import DOMPurify from "dompurify";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import remarkFrontmatter from "remark-frontmatter";
 import type { OutlineItem } from "../types";
 
 export function slugify(input: string, used = new Map<string, number>()): string {
@@ -15,17 +20,15 @@ export function slugify(input: string, used = new Map<string, number>()): string
 
 export function extractOutline(markdown: string): OutlineItem[] {
   const result: OutlineItem[] = [];
-  const used = new Map<string, number>();
-  let fenced = false;
-  for (const line of markdown.split(/\r?\n/)) {
-    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
-    if (fenced) continue;
-    const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
-    if (match) {
-      const text = match[2].replace(/[*_`~]/g, "").trim();
-      result.push({ level: match[1].length, text, id: `user-content-${slugify(text, used)}` });
-    }
-  }
+  const body = normalizeTexDelimiters(splitFrontmatter(markdown).body);
+  const processor = unified().use(remarkParse).use(remarkGfm).use(remarkMath).use(remarkFrontmatter)
+    .use(remarkWikiLinks).use(remarkHeadingIds);
+  const tree = processor.runSync(processor.parse(body)) as Root;
+  visit(tree, "heading", (node: Heading) => {
+    const text = plainText(node.children);
+    const id = String((node.data?.hProperties as { id?: string } | undefined)?.id ?? "");
+    result.push({ level: node.depth, text, id: `user-content-${id}` });
+  });
   return result;
 }
 
@@ -136,7 +139,7 @@ export function remarkWikiLinks() {
 
 function plainText(nodes: PhrasingContent[]): string {
   return nodes.map((node) => {
-    if (node.type === "text" || node.type === "inlineCode") return node.value;
+    if (node.type === "text" || node.type === "inlineCode" || node.type === "inlineMath") return node.value;
     if ("children" in node) return plainText(node.children as PhrasingContent[]);
     return "";
   }).join("");

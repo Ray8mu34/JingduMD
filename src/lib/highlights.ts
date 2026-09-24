@@ -155,7 +155,8 @@ export function clearTextHighlights(): void {
 export function scrollToHighlight(item: ResolvedHighlight | undefined): boolean {
   const element = item?.range?.startContainer.parentElement;
   if (!element) return false;
-  element.scrollIntoView({ behavior: "smooth", block: "center" });
+  window.dispatchEvent(new CustomEvent("jingreader:reveal-heading", { detail: element }));
+  requestAnimationFrame(() => requestAnimationFrame(() => element.scrollIntoView({ behavior: "smooth", block: "center" })));
   return true;
 }
 
