@@ -14,6 +14,7 @@
     "qa:settings": "node scripts/qa-settings.mjs",
     "qa:samples": "node scripts/qa-samples.mjs",
     "qa:navigation": "node scripts/qa-navigation.mjs",
+    "qa:interaction": "node scripts/qa-interaction.mjs",
     "tauri": "tauri",
     "release:macos": "node scripts/release-macos.mjs"
   },
