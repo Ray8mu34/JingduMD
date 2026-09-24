@@ -38,6 +38,23 @@ function sourceHeadings(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>("h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]")]
     .filter((heading) => heading.id !== "user-content-footnote-label");
 }
+function applyReadingPosition(container: HTMLElement, saved: ReadingPosition): boolean {
+  const heading = saved.headingId ? document.getElementById(saved.headingId) : null;
+  if (heading && container.contains(heading) && Number.isFinite(saved.headingRatio) && saved.headingRatio >= 0 && saved.headingRatio <= 1) {
+    const headings = sourceHeadings(container);
+    const index = headings.indexOf(heading);
+    if (index >= 0) {
+      const nextTop = headings[index + 1]?.offsetTop ?? container.scrollHeight;
+      container.scrollTop = heading.offsetTop + (nextTop - heading.offsetTop) * saved.headingRatio;
+      return true;
+    }
+  }
+  if (Number.isFinite(saved.documentRatio) && saved.documentRatio >= 0 && saved.documentRatio <= 1) {
+    container.scrollTop = (container.scrollHeight - container.clientHeight) * saved.documentRatio;
+    return true;
+  }
+  return false;
+}
 type PreferencesChanged = { source: string; preferences: ReaderPreferences };
 type HighlightsChanged = { path: string; source: string };
 type HighlightPopover = { x: number; y: number; draft: NewTextHighlight };
@@ -113,12 +130,16 @@ export default function App() {
   const searchCaller = useRef<HTMLElement | null>(null);
   const documentGeneration = useRef(0);
   const userScrollGeneration = useRef(0);
+  const positionState = useRef<{ path: string; generation: number; userGeneration: number; ready: boolean; readPending: boolean; readFailed: boolean; sameDocument: boolean; restoreTarget: ReadingPosition | null } | null>(null);
+  const windowPositions = useRef(new Map<string, ReadingPosition>());
+  const presentedPath = useRef<string | null>(null);
   const pendingAnchor = useRef<{ path: string; anchor: TextAnchor } | null>(null);
   const liveAnchor = useRef<{ path: string; generation: number; anchor: TextAnchor } | null>(null);
   const outline = useMemo(() => doc ? extractOutline(doc.content) : [], [doc]);
   const metrics = useMemo(() => doc ? readingMetrics(doc.content) : null, [doc]);
 
   const preserveAnchor = useCallback(() => {
+    if (positionState.current) positionState.current.restoreTarget = null;
     const path = documentRef.current?.path;
     const anchor = scrollRef.current && captureTextAnchor(scrollRef.current);
     if (path && anchor) pendingAnchor.current = { path, anchor };
@@ -286,6 +307,10 @@ export default function App() {
   }, [updateReadingTelemetry]);
 
   useLayoutEffect(() => {
+    if (presentedPath.current !== (doc?.path ?? null)) {
+      presentedPath.current = doc?.path ?? null;
+      if (doc && scrollRef.current) scrollRef.current.scrollTop = 0;
+    }
     const pending = pendingAnchor.current;
     if (pending && pending.path === doc?.path && scrollRef.current) {
       restoreTextAnchor(scrollRef.current, pending.anchor);
@@ -300,6 +325,11 @@ export default function App() {
     const article = container?.querySelector<HTMLElement>(".markdown-body");
     if (!container || !article || !doc || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
+      const initial = positionState.current;
+      if (initial?.path === doc.path && initial.ready && initial.restoreTarget && initial.userGeneration === userScrollGeneration.current) {
+        applyReadingPosition(container, initial.restoreTarget);
+        return;
+      }
       const live = liveAnchor.current;
       if (!live || live.path !== doc.path || live.generation !== userScrollGeneration.current) return;
       if (restoreTextAnchor(container, live.anchor)) {
@@ -314,13 +344,16 @@ export default function App() {
   const navigateHeading = useCallback((id: string) => {
     const target = document.getElementById(id) ?? document.getElementById(id.startsWith("user-content-") ? id.slice(13) : `user-content-${id}`);
     if (!target) return;
+    userScrollGeneration.current++;
+    if (positionState.current && !positionState.current.readFailed) { positionState.current.ready = true; positionState.current.restoreTarget = null; }
     window.dispatchEvent(new CustomEvent("jingreader:reveal-heading", { detail: target }));
     requestAnimationFrame(() => requestAnimationFrame(() => target.scrollIntoView({ behavior: "smooth" })));
   }, []);
 
   const persistPosition = useCallback((path: string) => {
     const container = scrollRef.current;
-    if (!container || documentRef.current?.path !== path) return;
+    const state = positionState.current;
+    if (!container || documentRef.current?.path !== path || state?.path !== path || !state.ready || state.readPending || state.readFailed) return;
     const headings = sourceHeadings(container);
     const top = container.scrollTop + 24;
     let active: HTMLElement | undefined;
@@ -329,42 +362,60 @@ export default function App() {
     const nextTop = headings[index + 1]?.offsetTop ?? container.scrollHeight;
     const headingRatio = active ? Math.max(0, Math.min(1, (top - active.offsetTop) / Math.max(1, nextTop - active.offsetTop))) : 0;
     const documentRatio = container.scrollTop / Math.max(1, container.scrollHeight - container.clientHeight);
-    void invoke("save_reading_position", { position: { path, headingId: active?.id ?? null, headingRatio, documentRatio } });
+    const position = { path, headingId: active?.id ?? null, headingRatio, documentRatio };
+    windowPositions.current.set(path, position);
+    void invoke("save_reading_position", { position });
   }, []);
 
   const restorePosition = useCallback(async (path: string, generation: number, hash?: string) => {
     const userGeneration = userScrollGeneration.current;
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const container = scrollRef.current;
-    if (!container || generation !== documentGeneration.current || userGeneration !== userScrollGeneration.current) return;
+    const state = positionState.current;
+    if (!container || generation !== documentGeneration.current || state?.generation !== generation || state.path !== path || documentRef.current?.path !== path) return;
+    if (userGeneration !== userScrollGeneration.current) { state.ready = true; return; }
     if (hash) {
-      navigateHeading(decodeURIComponent(hash));
+      const id = decodeURIComponent(hash);
+      const target = document.getElementById(id) ?? document.getElementById(id.startsWith("user-content-") ? id.slice(13) : `user-content-${id}`);
+      if (target && container.contains(target)) {
+        target.scrollIntoView({ block: "start" });
+        state.readPending = false;
+        state.ready = true;
+        updateReadingTelemetry();
+        return;
+      }
+    }
+    if (state.sameDocument) {
+      state.readPending = false;
+      state.ready = true;
       updateReadingTelemetry();
       return;
     }
-    const saved = await invoke<ReadingPosition | null>("get_reading_position", { path });
-    if (generation !== documentGeneration.current || userGeneration !== userScrollGeneration.current) return;
-    if (saved) {
-      const heading = saved.headingId ? document.getElementById(saved.headingId) : null;
-      if (heading) {
-        const headings = sourceHeadings(container);
-        const index = headings.indexOf(heading);
-        const nextTop = headings[index + 1]?.offsetTop ?? container.scrollHeight;
-        container.scrollTop = heading.offsetTop + (nextTop - heading.offsetTop) * saved.headingRatio;
-      } else {
-        container.scrollTop = (container.scrollHeight - container.clientHeight) * saved.documentRatio;
+    let saved = windowPositions.current.get(path) ?? null;
+    if (!saved) {
+      try { saved = await invoke<ReadingPosition | null>("get_reading_position", { path }); }
+      catch (error) {
+        if (generation === documentGeneration.current && positionState.current === state) { state.readPending = false; state.readFailed = true; if (userGeneration === userScrollGeneration.current) container.scrollTop = 0; notify(`无法读取阅读位置：${errorText(error)}`); }
+        return;
       }
     }
+    if (generation !== documentGeneration.current || positionState.current !== state || documentRef.current?.path !== path) return;
+    state.readPending = false;
+    if (userGeneration !== userScrollGeneration.current) { state.ready = true; return; }
+    if (saved && applyReadingPosition(container, saved)) state.restoreTarget = saved;
+    else container.scrollTop = 0;
+    state.ready = true;
     updateReadingTelemetry();
-  }, [navigateHeading, updateReadingTelemetry]);
+  }, [notify, updateReadingTelemetry]);
 
   const loadDocument = useCallback(async (path: string, hash?: string, recordHistory = true) => {
-    const generation = ++documentGeneration.current;
     try {
       const current = documentRef.current;
       window.clearTimeout(saveTimer.current);
       if (current && current.path !== path) persistPosition(current.path);
-      if (current?.path === path) preserveAnchor();
+      if (current?.path === path && !hash) preserveAnchor();
+      if (current?.path !== path) { pendingAnchor.current = null; liveAnchor.current = null; }
+      const generation = ++documentGeneration.current;
       if (recordHistory && current && current.path !== path) {
         backHistory.current = [...backHistory.current.slice(-98), current.path];
         forwardHistory.current = [];
@@ -373,6 +424,7 @@ export default function App() {
       const payload = await invoke<DocumentPayload>("read_document", { path });
       if (generation !== documentGeneration.current) return;
       documentRef.current = payload;
+      positionState.current = { path: payload.path, generation, userGeneration: userScrollGeneration.current, ready: false, readPending: true, readFailed: false, sameDocument: current?.path === payload.path && !hash, restoreTarget: null };
       setDoc(payload);
       document.title = `${payload.name} · 静读 Markdown`;
       window.setTimeout(() => void restorePosition(payload.path, generation, hash), 0);
@@ -404,6 +456,7 @@ export default function App() {
       documentGeneration.current++;
       if (documentRef.current) persistPosition(documentRef.current.path);
       documentRef.current = null;
+      positionState.current = null;
       if (rootRef.current !== target.root) {
         backHistory.current = [];
         forwardHistory.current = [];
@@ -649,6 +702,11 @@ export default function App() {
   function saveReadingPosition() {
     scheduleReadingTelemetry();
     if (!doc || !scrollRef.current) return;
+    const state = positionState.current;
+    if (state?.path !== doc.path || state.generation !== documentGeneration.current || state.readPending || state.readFailed) return;
+    if (state.userGeneration === userScrollGeneration.current) return;
+    state.ready = true;
+    state.restoreTarget = null;
     const anchor = captureTextAnchor(scrollRef.current);
     if (anchor) liveAnchor.current = { path: doc.path, generation: userScrollGeneration.current, anchor };
     window.clearTimeout(saveTimer.current);

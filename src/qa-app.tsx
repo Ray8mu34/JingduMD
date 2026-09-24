@@ -5,7 +5,7 @@ import { applyPreset } from "./lib/readerPreferences";
 import "katex/dist/katex.min.css";
 import "./styles.css";
 
-const names = ["reader-showcase.md", "plain-article.md", "anonymous-timeline.md", "readme-sample.md"];
+const names = ["reader-showcase.md", "plain-article.md", "anonymous-timeline.md", "readme-sample.md", "delayed-long.md", "navigation-links.md"];
 const root = "C:\\qa-fixtures";
 const paths = names.map((name) => `${root}\\${name}`);
 const params = new URLSearchParams(location.search);
@@ -19,7 +19,12 @@ for (const [index, name] of names.entries()) {
 
 const requested = params.get("sample");
 const listeners = new Map<string, number>();
-const state = { saves: [] as ReaderPreferences[], calls: [] as string[], fontCalls: 0, selected: paths[names.indexOf(requested ?? "")] ?? paths[0],
+const positions = new Map<string, { path: string; headingId: string | null; headingRatio: number; documentRatio: number }>();
+const positionWrites: string[] = [];
+const positionReadFailures = new Set<string>();
+const positionReadDelays = new Map<string, number>();
+const documentReadDelays = new Map<string, number>();
+const state = { saves: [] as ReaderPreferences[], calls: [] as string[], fontCalls: 0, positions, positionWrites, positionReadFailures, positionReadDelays, documentReadDelays, selected: paths[names.indexOf(requested ?? "")] ?? paths[0],
   emitPreferences(preferences: ReaderPreferences) {
     const handler = listeners.get("preferences-updated");
     if (handler) callbacks.get(handler)?.({ payload: { source: "other-window", preferences } });
@@ -41,18 +46,33 @@ const internals = {
       case "consume_window_target": return params.has("noTarget") ? null : { root, selectedFile: params.has("folderOnly") ? null : state.selected };
       case "consume_startup_target": return null;
       case "list_recent_roots": return [];
-      case "read_document": return documents.get(String(args.path)) ?? Promise.reject(new Error(`Unknown QA document: ${args.path}`));
+      case "read_document": {
+        const path = String(args.path);
+        await new Promise((resolve) => setTimeout(resolve, documentReadDelays.get(path) ?? 0));
+        return documents.get(path) ?? Promise.reject(new Error(`Unknown QA document: ${path}`));
+      }
       case "open_target": return { root, selectedFile: String(args.path) };
       case "list_directory": return names.map((name, index) => ({ path: paths[index], name, kind: "markdown" }));
       case "load_expanded_paths": case "list_text_highlights": case "list_document_highlights": case "list_recent_highlights": return [];
-      case "get_reading_position": return null;
+      case "get_reading_position": {
+        const path = String(args.path);
+        await new Promise((resolve) => setTimeout(resolve, positionReadDelays.get(path) ?? 0));
+        if (positionReadFailures.has(path)) throw new Error("QA position read failed");
+        return positions.get(path) ?? null;
+      }
+      case "save_reading_position": {
+        const position = args.position as { path: string; headingId: string | null; headingRatio: number; documentRatio: number };
+        positions.set(position.path, structuredClone(position));
+        positionWrites.push(position.path);
+        return null;
+      }
       case "get_index_diagnostics": return { documentCount: 3, indexedCount: 3, databaseBytes: 0 };
       case "list_system_fonts": state.fontCalls++; return [];
       case "plugin:window|is_maximized": return false;
       case "plugin:event|listen": listeners.set(String(args.event), Number(args.handler)); return Number(args.handler);
       case "plugin:event|unlisten": return null;
       case "plugin:dialog|open": return params.get("dialogFile") ?? paths[0];
-      case "start_watch": case "index_root": case "save_reading_position": case "set_path_expanded": return null;
+      case "start_watch": case "index_root": case "set_path_expanded": return null;
       default: throw new Error(`Unexpected QA invoke: ${command}`);
     }
   }
