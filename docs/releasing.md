@@ -14,6 +14,8 @@ macOS 的 App/DMG、通用二进制和签名公证说明见 [macos.md](macos.md)
 
 日常安装优先使用 NSIS `setup.exe`，它按当前用户安装且无需 Visual Studio。MSI 采用 Windows Installer 的全机注册语义，需要管理员权限，主要用于受管部署。
 
+若旧版程序仍在运行，可先设置绝对路径的 `CARGO_TARGET_DIR`，再执行发布脚本；脚本会从该目录收集打包产物，避免覆盖正在运行的 EXE。
+
 ## Authenticode 签名
 
 仓库不保存证书和私钥。获得可信代码签名证书后，将证书导入当前用户证书库，再运行：

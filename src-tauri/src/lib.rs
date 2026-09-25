@@ -1728,10 +1728,36 @@ fn load_preferences(state: State<AppState>) -> Result<Option<ReaderPreferences>,
     let raw = serde_json::from_str::<serde_json::Value>(&content).ok();
     let valid_v2 = raw.as_ref().is_some_and(|value| {
         value.get("schemaVersion").and_then(|item| item.as_u64()) == Some(2)
-            && matches!(value.get("styleMode").and_then(|item| item.as_str()), Some("canonical" | "legacy"))
-            && matches!(value.get("typographyProfile").and_then(|item| item.as_str()), Some("reading" | "study"))
-            && matches!(value.get("appearance").and_then(|item| item.as_str()), Some("warm" | "white" | "night" | "nord"))
-            && matches!(value.get("theme").and_then(|item| item.as_str()), Some("paper" | "humanist" | "chinese" | "editorial" | "swiss" | "modern-textbook" | "solarized" | "night" | "nord" | "eink" | "technical"))
+            && matches!(
+                value.get("styleMode").and_then(|item| item.as_str()),
+                Some("canonical" | "legacy")
+            )
+            && matches!(
+                value
+                    .get("typographyProfile")
+                    .and_then(|item| item.as_str()),
+                Some("reading" | "study")
+            )
+            && matches!(
+                value.get("appearance").and_then(|item| item.as_str()),
+                Some("warm" | "white" | "night" | "nord")
+            )
+            && matches!(
+                value.get("theme").and_then(|item| item.as_str()),
+                Some(
+                    "paper"
+                        | "humanist"
+                        | "chinese"
+                        | "editorial"
+                        | "swiss"
+                        | "modern-textbook"
+                        | "solarized"
+                        | "night"
+                        | "nord"
+                        | "eink"
+                        | "technical"
+                )
+            )
     });
     if !valid_v2 && !backup.exists() {
         fs::copy(&state.preferences_path, &backup).map_err(|e| e.to_string())?;
@@ -1858,12 +1884,19 @@ unsafe extern "system" fn collect_font_face(
     data: isize,
 ) -> i32 {
     use windows_sys::Win32::Graphics::Gdi::{ENUMLOGFONTEXW, TRUETYPE_FONTTYPE};
-    if logfont.is_null() || data == 0 || font_type & TRUETYPE_FONTTYPE == 0 { return 1; }
+    if logfont.is_null() || data == 0 || font_type & TRUETYPE_FONTTYPE == 0 {
+        return 1;
+    }
     let face = &*(logfont as *const ENUMLOGFONTEXW);
     let full = &face.elfFullName;
-    let length = full.iter().position(|value| *value == 0).unwrap_or(full.len());
+    let length = full
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(full.len());
     let name = String::from_utf16_lossy(&full[..length]).trim().to_owned();
-    if name.is_empty() { return 1; }
+    if name.is_empty() {
+        return 1;
+    }
     let faces = &mut *(data as *mut FontFaces);
     let bold = face.elfLogFont.lfWeight >= 600;
     let italic = face.elfLogFont.lfItalic != 0;
@@ -1873,7 +1906,9 @@ unsafe extern "system" fn collect_font_face(
         (false, true) => &mut faces.italic,
         (true, true) => &mut faces.bold_italic,
     };
-    if slot.is_none() { *slot = Some(name); }
+    if slot.is_none() {
+        *slot = Some(name);
+    }
     1
 }
 
@@ -1958,12 +1993,34 @@ fn list_system_fonts() -> Result<Vec<SystemFont>, String> {
             let supports_latin = unsafe { supports_sample(device, &family, "AaZz09", 6) };
             let mut face_request: LOGFONTW = unsafe { std::mem::zeroed() };
             face_request.lfCharSet = DEFAULT_CHARSET;
-            for (target, unit) in face_request.lfFaceName.iter_mut().zip(family.encode_utf16()) { *target = unit; }
+            for (target, unit) in face_request
+                .lfFaceName
+                .iter_mut()
+                .zip(family.encode_utf16())
+            {
+                *target = unit;
+            }
             let mut faces = FontFaces::default();
-            unsafe { EnumFontFamiliesExW(device, &face_request, Some(collect_font_face), &mut faces as *mut FontFaces as isize, 0); }
+            unsafe {
+                EnumFontFamiliesExW(
+                    device,
+                    &face_request,
+                    Some(collect_font_face),
+                    &mut faces as *mut FontFaces as isize,
+                    0,
+                );
+            }
             SystemFont {
                 family,
-                faces: if faces.regular.is_some() || faces.bold.is_some() || faces.italic.is_some() || faces.bold_italic.is_some() { Some(faces) } else { None },
+                faces: if faces.regular.is_some()
+                    || faces.bold.is_some()
+                    || faces.italic.is_some()
+                    || faces.bold_italic.is_some()
+                {
+                    Some(faces)
+                } else {
+                    None
+                },
                 supports_cjk,
                 supports_latin,
             }
@@ -2630,10 +2687,16 @@ mod tests {
         assert_eq!(loaded.appearance, "nord");
         assert_eq!(loaded.legacy_appearance.as_deref(), Some("night"));
         assert_eq!(loaded.typography_profile, "study");
-        assert_eq!(loaded.typography_overrides["reading"]["chineseFont"], "Noto Serif SC");
+        assert_eq!(
+            loaded.typography_overrides["reading"]["chineseFont"],
+            "Noto Serif SC"
+        );
         assert_eq!(loaded.chinese_heading_font, "SimSun");
         assert_eq!(loaded.latin_heading_font, "Georgia");
-        assert_eq!(loaded.typography_overrides["reading"]["latinHeadingFont"], "Georgia");
+        assert_eq!(
+            loaded.typography_overrides["reading"]["latinHeadingFont"],
+            "Georgia"
+        );
         assert_eq!(loaded.typography_overrides["study"]["lineHeight"], 1.9);
     }
     #[cfg(target_os = "windows")]

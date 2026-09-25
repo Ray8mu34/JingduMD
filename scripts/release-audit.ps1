@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
 $release = Join-Path $project 'release'
+$targetRoot = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { Join-Path $project 'src-tauri\target' }
 $env:RUSTUP_HOME = 'D:\Env\Rust\Rustup'
 $env:CARGO_HOME = 'D:\Env\Rust\Cargo'
 $env:Path = "D:\Env\Rust\Cargo\bin;$env:Path"
@@ -29,7 +30,7 @@ if (-not $SkipChecks) {
 if (-not $SkipBuild) { Invoke-Checked { pnpm.cmd tauri build } }
 
 New-Item -ItemType Directory -Path $release -Force | Out-Null
-$bundleRoot = Join-Path $project 'src-tauri\target\release\bundle'
+$bundleRoot = Join-Path $targetRoot 'release\bundle'
 $artifacts = @()
 if (Test-Path -LiteralPath $bundleRoot) {
   $bundleArtifacts = Get-ChildItem -LiteralPath $bundleRoot -Recurse -File | Where-Object { $_.Extension -in '.exe', '.msi' -and $_.Name -match [regex]::Escape($version) }
@@ -39,7 +40,7 @@ if (Test-Path -LiteralPath $bundleRoot) {
     $artifacts += Get-Item -LiteralPath $destination
   }
 }
-$portableSource = Join-Path $project 'src-tauri\target\release\jingreader.exe'
+$portableSource = Join-Path $targetRoot 'release\jingreader.exe'
 if (Test-Path -LiteralPath $portableSource) {
   $portable = Join-Path $release "JingReader-Portable-$version.exe"
   Copy-Item -LiteralPath $portableSource -Destination $portable -Force
