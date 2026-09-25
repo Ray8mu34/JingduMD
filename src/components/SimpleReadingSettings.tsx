@@ -10,6 +10,10 @@ type Page = "quick" | "paragraph" | "fonts" | "personal" | "legacy";
 const appearances: [AppearanceId, string][] = [["warm", "暖纸"], ["white", "素白"], ["night", "静谧夜读"], ["nord", "Nord 极夜"]];
 const styleKeys = ["styleMode", "typographyProfile", "appearance", "legacyAppearance", "fontSize", "lineHeight", "contentWidth", "paragraphSpacing", "fontFamily", "chineseFont", "latinFont", "chineseHeadingFont", "latinHeadingFont", "headingFont", "codeFont", "headingScale", "headingDensity", "paragraphStyle", "firstLineIndent", "textAlign", "letterSpacing", "quoteStyle", "tableStyle", "codeWrap", "codeScale", "formulaScale", "imageBrightness", "imageStyle", "backgroundWarmth", "textContrast", "theme", "readingFocus", "readingRuler"] as const;
 const widths = [640, 760, 860];
+const serifCjk = ["Noto Serif SC", "Source Han Serif SC", "Noto Serif CJK SC", "SimSun"];
+const serifLatin = ["Source Serif 4", "Source Serif", "Source Serif Pro", "Charter", "Literata", "Noto Serif", "Georgia", "Cambria"];
+const installedFamily = (fonts: SystemFont[], candidates: string[]) =>
+  candidates.map((candidate) => fonts.find((font) => font.family.toLocaleLowerCase() === candidate.toLocaleLowerCase())?.family).find(Boolean) ?? "";
 
 export default function SimpleReadingSettings({ value, onChange, onClose, onLegacyEdit }: Props) {
   const baseline = useRef(new Map<string, unknown>());
@@ -87,6 +91,15 @@ export default function SimpleReadingSettings({ value, onChange, onClose, onLega
   const defaultLeading = value.typographyProfile === "study" ? 1.78 : 1.85;
   const leadingOptions = [defaultLeading - .1, defaultLeading, defaultLeading + .1];
   const selectedAppearance = value.styleMode === "legacy" ? value.legacyAppearance : value.appearance;
+  const pairedChinese = installedFamily(fonts, serifCjk);
+  const pairedLatin = installedFamily(fonts, serifLatin);
+  const applySerifPair = () => {
+    const body = { fontFamily: "serif" as const, chineseFont: pairedChinese, latinFont: pairedLatin };
+    change({ ...value, ...body, typographyOverrides: {
+      reading: { ...value.typographyOverrides.reading, ...body },
+      study: { ...value.typographyOverrides.study, ...body }
+    } });
+  };
   const title = ({ quick: "阅读设置", paragraph: "段落与细节", fonts: "字体", personal: "个人排版", legacy: "兼容样式" } as const)[page];
   return <aside ref={panel} className={`settings-sheet simple-settings page-${page}`} role="dialog" aria-label={title} onBlur={(event) => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) onClose("tab"); }} onKeyDown={(event) => { if (event.key === "Escape" && page !== "quick") { event.preventDefault(); event.stopPropagation(); setPage("quick"); } }}>
     <div className="settings-title"><div className="settings-heading">{page !== "quick" && <button aria-label="返回阅读设置" onClick={() => setPage("quick")}><ArrowLeft /></button>}<h2>{title}</h2></div><button onClick={() => onClose("button")} aria-label="关闭阅读设置"><X /></button></div>
@@ -106,7 +119,7 @@ export default function SimpleReadingSettings({ value, onChange, onClose, onLega
         {value.styleMode === "canonical" && <button className="text-action" onClick={() => change({ ...value, typographyOverrides: { ...value.typographyOverrides, [value.typographyProfile]: {} } })}>恢复当前排版默认值</button>}
         <div className="detail-links"><button onClick={() => setPage("personal")}>个人排版</button><button onClick={() => setPage("legacy")}>兼容样式</button></div>
       </>}
-      {page === "fonts" && <><nav className="detail-tabs" aria-label="详细排版页面"><button data-initial-focus onClick={() => setPage("paragraph")}>段落</button><button className="active">字体</button></nav><div className="font-catalog-actions"><span>{fontsLoading ? "正在读取字体…" : fontError || `本机 ${fonts.length} 种字体`}</span><button onClick={refreshFonts}>刷新列表</button></div><div className="font-role-fields">{FONT_ROLES.map(({ key, label }) => {
+      {page === "fonts" && <><nav className="detail-tabs" aria-label="详细排版页面"><button data-initial-focus onClick={() => setPage("paragraph")}>段落</button><button className="active">字体</button></nav><div className="font-catalog-actions"><span>{fontsLoading ? "正在读取字体…" : fontError || `本机 ${fonts.length} 种字体`}</span><button onClick={refreshFonts}>刷新列表</button></div><div className="font-pair-suggestion"><div><strong>正文搭配建议</strong><small>{pairedChinese || "默认中文衬线"} × {pairedLatin || "默认西文衬线"}；数学保留 KaTeX</small></div><button type="button" disabled={fontsLoading || !!fontError || !fonts.length} onClick={applySerifPair}>应用到两套排版</button></div><div className="font-role-fields">{FONT_ROLES.map(({ key, label }) => {
         const headingRole = key === "chineseHeadingFont" || key === "latinHeadingFont";
         const inherited = headingRole && !!effective.headingFont && !effective[key] && (value.styleMode === "legacy" || value.typographyOverrides[value.typographyProfile]?.[key] === undefined);
         return <ReadingFontPicker key={key} label={label} value={inherited ? effective.headingFont : effective[key]} inheritedLabel={inherited ? value.styleMode === "legacy" ? "兼容标题" : "旧标题设置" : undefined} defaultLabel={headingRole && value.styleMode === "legacy" && effective.headingFont ? "沿用兼容标题" : undefined} fonts={fonts} loading={fontsLoading} error={fontError} onRetry={refreshFonts} onSelect={(family) => setDetail(key, family)} />;

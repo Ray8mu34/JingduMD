@@ -23,6 +23,7 @@
     "qa:math": "node scripts/qa-math-geometry.mjs",
     "qa:style-contract": "node scripts/qa-style-contract.mjs",
     "qa:continuous-proof": "node scripts/qa-continuous-proof.mjs",
+    "qa:text-flow": "node scripts/qa-text-flow.mjs",
     "tauri": "tauri",
     "release:macos": "node scripts/release-macos.mjs"
   },

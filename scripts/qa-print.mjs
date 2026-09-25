@@ -16,9 +16,10 @@ try {
   const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
   await page.goto(`${server.resolvedUrls.local[0]}qa.html?sample=reader-showcase.md&profile=study&appearance=warm`);
   await page.locator(".markdown-body table").first().waitFor();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await page.evaluate(() => window.dispatchEvent(new Event("jingreader:expand-for-print")));
   await page.waitForFunction(() => [...document.querySelectorAll(".math-display")].every((element) => element.querySelector(".katex")), undefined, { timeout: 15000 });
-  await page.waitForFunction(() => [...document.querySelectorAll(".code-block")].every((element) => element.querySelector(".hljs")), undefined, { timeout: 15000 });
+  await page.locator(".code-block pre code").first().waitFor();
   await page.evaluate(() => {
     const tbody = document.querySelector(".table-frame tbody");
     const row = tbody.querySelector("tr");

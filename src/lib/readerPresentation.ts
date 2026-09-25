@@ -14,7 +14,7 @@ export function readerPresentation(preferences: ReaderPreferences, fonts: System
   };
   const serif = typography.fontFamily === "serif";
   const bodyFallback = serif
-    ? legacy ? '"Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif' : 'Georgia, "Noto Serif SC", "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif'
+    ? legacy ? '"Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif' : '"Source Serif 4", "Source Serif", Charter, Literata, "Noto Serif", Georgia, "Noto Serif SC", "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif'
     : legacy ? '"Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif' : '"Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif';
   const headingFallback = serif
     ? legacy ? 'Georgia, "Noto Serif CJK SC", "Songti SC", serif'
