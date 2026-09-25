@@ -19,7 +19,7 @@ export function readerPresentation(preferences: ReaderPreferences, fonts: System
   const headingFallback = serif
     ? legacy ? 'Georgia, "Noto Serif CJK SC", "Songti SC", serif'
       : preferences.typographyProfile === "study" ? '"Segoe UI", "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif'
-        : 'Georgia, "Noto Serif SC", "Noto Serif CJK SC", "Songti SC", serif'
+        : '"Source Serif 4", "Source Serif", "Noto Serif", Cambria, "Noto Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif'
     : legacy ? 'Inter, "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif' : 'Inter, "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif';
   const style = {
     "--reader-size": `${typography.fontSize}px`, "--reader-leading": typography.lineHeight,

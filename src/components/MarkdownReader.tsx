@@ -136,7 +136,7 @@ function CollapsibleCodeBlock({ children, language, lines, wide }: { children: R
   const [collapsed, setCollapsed] = useState(false);
   const label = language || "代码";
   useEffect(() => { const expand = () => setCollapsed(false); window.addEventListener("jingreader:expand-for-print", expand); return () => window.removeEventListener("jingreader:expand-for-print", expand); }, []);
-  return <div className={`code-block ${wide ? "is-wide" : ""} ${collapsed ? "is-collapsed" : ""}`}>
+  return <div className={`code-block ${wide ? "is-wide" : ""} ${lines <= 3 ? "is-short" : ""} ${collapsed ? "is-collapsed" : ""}`}>
     <div className="code-block-toolbar"><span><Code2 />{label}<small>{lines} 行</small></span><button type="button" onClick={() => setCollapsed((value) => !value)} aria-expanded={!collapsed} title={collapsed ? "展开代码块" : "折叠代码块"}>{collapsed ? <ChevronRight /> : <ChevronDown />}{collapsed ? "展开" : "折叠"}</button></div>
     {!collapsed && <pre role="region" aria-label={`${label}代码，可横向滚动`} tabIndex={0}>{children}</pre>}
   </div>;
@@ -219,18 +219,33 @@ function ScrollableTable({ children }: { children?: ReactNode }) {
   useEffect(() => {
     const element = viewport.current;
     if (!element) return;
+    const table = element.querySelector("table");
+    if (table) {
+      const rows = [...table.rows];
+      // Leave author-supplied spanning cells alone; ordinary Markdown columns
+      // can use their content to avoid turning sentences into vertical strips.
+      if (rows.every((row) => [...row.cells].every((cell) => cell.colSpan === 1 && cell.rowSpan === 1))) {
+        for (let column = 0; column < (rows[0]?.cells.length ?? 0); column++) {
+          const cells = rows.map((row) => row.cells[column]).filter(Boolean);
+          const values = cells.slice(1).map((cell) => cell.textContent?.trim() ?? "").filter(Boolean);
+          const longest = values.reduce((max, value) => Math.max(max, [...value].length), 0);
+          const kind = values.length && values.every((value) => /^\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?$/.test(value)) ? "date"
+            : longest > 18 ? "prose" : longest <= 6 ? "compact" : "normal";
+          cells.forEach((cell) => { cell.dataset.columnKind = kind; });
+        }
+      }
+    }
     const measure = () => {
       setOverflow(Math.max(0, element.scrollWidth - element.clientWidth));
       setOffset(element.scrollLeft);
     };
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     observer?.observe(element);
-    const table = element.querySelector("table");
     if (table) observer?.observe(table);
     window.addEventListener("resize", measure);
     measure();
     return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
-  }, []);
+  }, [children]);
   return <div className="table-frame">
     {overflow > 1 && <div className="table-scroll-control">
       <span>横向查看表格</span>

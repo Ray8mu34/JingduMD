@@ -8,7 +8,7 @@ import {
   AppWindow, ArrowLeft, ArrowRight, Ban, ChevronDown, ChevronRight,
   ChevronUp, Copy, ExternalLink, Focus, FolderClock, FolderOpen, Maximize2, Minus,
   Highlighter, PanelLeftClose, PanelRightClose, Printer, Search, Settings, Square, TerminalSquare,
-  Trash2, X, MoreHorizontal, FileText, Database
+  Trash2, X, MoreHorizontal, FileText, Database, Type
 } from "lucide-react";
 import FileTree from "./components/FileTree";
 import MarkdownReader from "./components/MarkdownReader";
@@ -74,7 +74,8 @@ export default function App() {
   const [fontCatalog, setFontCatalog] = useState<SystemFont[]>([]);
   const [showTree, setShowTree] = useState(savedWindowState?.showTree ?? DEFAULT_PREFERENCES.showTree);
   const [showOutline, setShowOutline] = useState(savedWindowState?.showOutline ?? DEFAULT_PREFERENCES.showOutline);
-  const [narrow, setNarrow] = useState(() => window.innerWidth < 900);
+  // 270px file tree + 230px outline + at least 580px for the reading pane.
+  const [narrow, setNarrow] = useState(() => window.innerWidth < 1080);
   const [narrowTreeOpen, setNarrowTreeOpen] = useState(false);
   const [narrowOutlineOpen, setNarrowOutlineOpen] = useState(false);
   const [preferencesReady, setPreferencesReady] = useState(!isTauri());
@@ -91,6 +92,12 @@ export default function App() {
   const [findIndex, setFindIndex] = useState(0);
   const [focusMode, setFocusMode] = useState(false);
   const [message, setMessage] = useState("");
+  const [restoredPath, setRestoredPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (!restoredPath) return;
+    const timeout = window.setTimeout(() => setRestoredPath(null), 8000);
+    return () => window.clearTimeout(timeout);
+  }, [restoredPath]);
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const [treeVersion, setTreeVersion] = useState(0);
   const [activeHeading, setActiveHeading] = useState("");
@@ -161,14 +168,16 @@ export default function App() {
   }, [endPreferencesPreview, settingsSection]);
   const toggleTree = useCallback(() => {
     preserveAnchor();
-    if (narrow) { setNarrowTreeOpen((open) => !open); setNarrowOutlineOpen(false); }
-    else setShowTree((open) => !open);
-  }, [narrow, preserveAnchor]);
+    setFocusMode(false);
+    if (narrow) { setNarrowTreeOpen((open) => focusMode || !open); setNarrowOutlineOpen(false); }
+    else setShowTree((open) => focusMode || !open);
+  }, [focusMode, narrow, preserveAnchor]);
   const toggleOutline = useCallback(() => {
     preserveAnchor(); setRightTab("outline");
-    if (narrow) { setNarrowOutlineOpen((open) => !open); setNarrowTreeOpen(false); }
-    else setShowOutline((open) => !open);
-  }, [narrow, preserveAnchor]);
+    setFocusMode(false);
+    if (narrow) { setNarrowOutlineOpen((open) => focusMode || !open); setNarrowTreeOpen(false); }
+    else setShowOutline((open) => focusMode || !open);
+  }, [focusMode, narrow, preserveAnchor]);
   const openFolderSearch = useCallback(() => {
     searchCaller.current = document.activeElement as HTMLElement;
     if (settingsOpen) closeSettings("switch");
@@ -179,7 +188,7 @@ export default function App() {
     requestAnimationFrame(() => searchCaller.current?.isConnected && searchCaller.current.focus());
   }, []);
   useEffect(() => {
-    const update = () => { const next = window.innerWidth < 900; if (next !== narrow) { preserveAnchor(); setNarrow(next); setNarrowTreeOpen(false); setNarrowOutlineOpen(false); } };
+    const update = () => { const next = window.innerWidth < 1080; if (next !== narrow) { preserveAnchor(); setNarrow(next); setNarrowTreeOpen(false); setNarrowOutlineOpen(false); } };
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, [narrow, preserveAnchor]);
@@ -408,7 +417,10 @@ export default function App() {
     if (generation !== documentGeneration.current || positionState.current !== state || documentRef.current?.path !== path) return;
     state.readPending = false;
     if (userGeneration !== userScrollGeneration.current) { state.ready = true; return; }
-    if (saved && applyReadingPosition(container, saved)) state.restoreTarget = saved;
+    if (saved && applyReadingPosition(container, saved)) {
+      state.restoreTarget = saved;
+      if (container.scrollTop > 100) setRestoredPath(path);
+    }
     else container.scrollTop = 0;
     state.ready = true;
     updateReadingTelemetry();
@@ -416,6 +428,7 @@ export default function App() {
 
   const loadDocument = useCallback(async (path: string, hash?: string, recordHistory = true) => {
     try {
+      setRestoredPath(null);
       const current = documentRef.current;
       window.clearTimeout(saveTimer.current);
       if (current && current.path !== path) persistPosition(current.path);
@@ -756,7 +769,7 @@ export default function App() {
   return <div className={readingClasses}>
     <style>{presentation.fontCss}</style>
     <header ref={topbarRef} className="topbar" data-tauri-drag-region>
-      <button ref={treeTrigger} onClick={() => root ? toggleTree() : void chooseFolder()} aria-expanded={narrow ? narrowTreeOpen : showTree} title={shortcutLabel("文件列表 (Ctrl+Shift+E)")} aria-label="文件列表"><PanelLeftClose /><span>文件列表</span></button>
+      <button ref={treeTrigger} className="toolbar-action" onClick={() => root ? toggleTree() : void chooseFolder()} aria-expanded={!sidebarsHidden && (narrow ? narrowTreeOpen : showTree)} title={shortcutLabel("文件列表 (Ctrl+Shift+E)")} aria-label="文件列表"><PanelLeftClose /><span>文件</span></button>
       <button onClick={() => navigateHistory("back")} disabled={!backHistory.current.length} title="后退 (Alt+←)"><ArrowLeft /></button>
       <button onClick={() => navigateHistory("forward")} disabled={!forwardHistory.current.length} title="前进 (Alt+→)"><ArrowRight /></button>
       <div className="open-file-group"><button onClick={() => void chooseFile()} title={shortcutLabel("打开文件 (Ctrl+O)")}><FileText /><span>打开文件</span></button>
@@ -769,8 +782,9 @@ export default function App() {
       <div className="document-title" data-tauri-drag-region title={doc?.path}>{doc?.name ?? (root ? rootName(root) : "静读 Markdown")}</div>
       {indexStatus?.running && <div className="index-progress"><span>{indexStatus.phase === "rebuild" ? "重建" : "索引"} {indexStatus.indexed}/{indexStatus.total || "?"}</span><button onClick={() => void invoke("cancel_index")} title="取消索引"><Ban /></button></div>}
       <button disabled={!doc} onClick={() => setFindOpen(true)} title={shortcutLabel("在当前文档中查找 (Ctrl+F)")} aria-label="在当前文档中查找"><Search /><span>查找</span></button>
-      <button ref={outlineTrigger} disabled={!doc} onClick={toggleOutline} aria-expanded={narrow ? narrowOutlineOpen : showOutline} title={shortcutLabel("大纲 (Ctrl+Shift+O)")} aria-label="大纲"><PanelRightClose /><span>大纲</span></button>
-      <button ref={settingsTrigger} aria-label="阅读设置" aria-expanded={settingsOpen && settingsSection === "reading"} onClick={() => { if (settingsOpen && settingsSection === "reading") closeSettings("toggle"); else { if (settingsOpen) closeSettings("switch"); setSettingsSection("reading"); setSettingsOpen(true); setOpenMenuOpen(false); setMoreOpen(false); } }} title={shortcutLabel("阅读设置 (Ctrl+,)")}><span className="aa-icon">Aa</span></button>
+      <button ref={outlineTrigger} disabled={!doc} onClick={toggleOutline} aria-expanded={!sidebarsHidden && (narrow ? narrowOutlineOpen : showOutline)} title={shortcutLabel("大纲 (Ctrl+Shift+O)")} aria-label="大纲"><PanelRightClose /><span>大纲</span></button>
+      <button ref={settingsTrigger} aria-label="阅读设置" aria-expanded={settingsOpen && settingsSection === "reading"} onClick={() => { if (settingsOpen && settingsSection === "reading") closeSettings("toggle"); else { if (settingsOpen) closeSettings("switch"); setSettingsSection("reading"); setSettingsOpen(true); setOpenMenuOpen(false); setMoreOpen(false); } }} title={shortcutLabel("阅读设置 (Ctrl+,)")}><Type /><span>排版</span></button>
+      <button className="focus-toggle" disabled={!doc} aria-label={focusMode ? "退出专注阅读" : "专注阅读"} aria-pressed={focusMode} title={focusMode ? "退出专注阅读" : "专注阅读：隐藏两侧栏"} onClick={() => { preserveAnchor(); setFocusMode((value) => !value); }}><Focus /></button>
       <div className="toolbar-menu-wrap"><button ref={moreTrigger} aria-label="更多" aria-haspopup="menu" aria-controls="more-menu" aria-expanded={moreOpen} onClick={() => { if (settingsOpen) closeSettings("switch"); setMoreOpen((open) => !open); setOpenMenuOpen(false); }} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setMoreOpen(true); setOpenMenuOpen(false); } }}><MoreHorizontal /></button>{moreOpen && <div ref={moreMenu} id="more-menu" className="toolbar-menu" role="menu" aria-label="更多操作" onKeyDown={(event) => handleMenuKeys(event, (reason) => { setMoreOpen(false); if (reason === "escape") moreTrigger.current?.focus(); })}>
         <button role="menuitem" disabled={!doc} onClick={() => { if (doc) openDocumentInNewWindow(doc.path); setMoreOpen(false); }}><AppWindow />在新窗口打开</button>
         <button role="menuitem" disabled={!doc} onClick={() => { setPrintOptionsOpen(true); setMoreOpen(false); }}><Printer />打印或导出 PDF</button>
@@ -789,6 +803,7 @@ export default function App() {
     <main ref={workspaceRef} className="workspace">
       {!sidebarsHidden && (narrow ? narrowTreeOpen : showTree) && root && <aside ref={treeSidebar} className={`left-sidebar ${narrow ? "overlay-sidebar" : ""}`}><FileTree key={`${root}:${treeVersion}`} root={root} selected={doc?.path ?? null} onOpen={openDocument} onOpenNew={openDocumentInNewWindow} onSearch={openFolderSearch} onChooseFolder={() => void chooseFolder()} /></aside>}
       <section className="reader-pane">
+        {doc && restoredPath === doc.path && <div className="position-notice" role="status"><span>已回到上次阅读位置</span><button onClick={() => { preserveAnchor(); if (scrollRef.current) scrollRef.current.scrollTop = 0; pendingAnchor.current = null; setRestoredPath(null); }}>返回文首</button><button aria-label="关闭位置提示" onClick={() => setRestoredPath(null)}><X /></button></div>}
         {doc && <div className="reading-progress-track" aria-label={`阅读进度 ${Math.round(readingProgress * 100)}%`}><span style={{ width: `${readingProgress * 100}%` }} /></div>}
         {findOpen && <div className="find-bar">
           <input autoFocus value={findQuery} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") navigateFind(event.shiftKey ? -1 : 1); }} placeholder="在当前文档中查找" />
@@ -800,7 +815,7 @@ export default function App() {
         {doc ? <div ref={scrollRef} className="reader-scroll" style={readerStyle} onScroll={saveReadingPosition} onWheel={() => { userScrollGeneration.current++; }} onTouchStart={() => { userScrollGeneration.current++; }} onPointerDown={() => { userScrollGeneration.current++; }} onKeyDown={() => { userScrollGeneration.current++; }} onMouseUp={() => captureHighlightSelection()} onContextMenu={(event) => { if (!globalThis.getSelection()?.isCollapsed) { event.preventDefault(); captureHighlightSelection(true); } }}>
           <MarkdownReader document={doc} night={presentation.night} showFrontmatter={preferences.showFrontmatter} remoteImagePolicy={preferences.remoteImagePolicy} allowedRemoteHosts={preferences.allowedRemoteHosts} onAllowRemoteHost={allowRemoteHost} onOpenDocument={openDocument} />
         </div> : <div className="welcome">
-          {root ? <><h1>选择一篇文档</h1><p>从文件列表中选择要阅读的 Markdown 文件。</p><button className="primary" onClick={() => narrow ? setNarrowTreeOpen(true) : setShowTree(true)}>打开文件列表</button></>
+          {root ? <><h1>选择一篇文档</h1><p>{!sidebarsHidden && (narrow ? narrowTreeOpen : showTree) ? "从左侧选择一篇文档，开始阅读。" : "从文件列表中选择要阅读的 Markdown 文件。"}</p>{(sidebarsHidden || !(narrow ? narrowTreeOpen : showTree)) && <button className="primary" onClick={() => { setFocusMode(false); if (narrow) setNarrowTreeOpen(true); else setShowTree(true); }}>打开文件列表</button>}</>
             : <><h1>打开 Markdown 开始阅读</h1><div className="welcome-actions"><button className="primary" onClick={() => void chooseFile()}><FileText />打开文件</button><button onClick={() => void chooseFolder()}><FolderOpen />打开文件夹</button></div></>}
           {!root && !!recentRoots.length && <div className="recent-roots"><strong><FolderClock />最近阅读</strong>{recentRoots.slice(0, 5).map((recent) => <button key={recent.path} onClick={() => void applyTarget(recent.path)} title={recent.path}><span>{rootName(recent.path)}</span><small>{recent.path}</small></button>)}</div>}
         </div>}
@@ -808,7 +823,7 @@ export default function App() {
       {!sidebarsHidden && (narrow ? narrowOutlineOpen : showOutline) && doc && <aside ref={outlineSidebar} className={`right-sidebar ${narrow ? "overlay-sidebar" : ""}`}>
         <div className="sidebar-tabs"><button className={rightTab === "outline" ? "active" : ""} onClick={() => setRightTab("outline")}>大纲</button><button className={rightTab === "highlights" ? "active" : ""} onClick={() => setRightTab("highlights")}>高亮 {resolvedHighlights.length > 0 && <span>{resolvedHighlights.length}</span>}</button></div>
         {rightTab === "outline" ? <>
-          <nav className="outline">{outline.length <= 1 ? <div className="outline-empty">{outline[0] && <button onClick={() => navigateHeading(outline[0].id)}>返回文首</button>}<p>这篇文档没有分节。</p></div> : outline.map((item) => <button key={item.id} className={activeHeading === item.id ? "active" : ""} aria-current={activeHeading === item.id ? "location" : undefined} style={{ paddingLeft: `${10 + (item.level - 1) * 12}px` }} onClick={() => { navigateHeading(item.id); if (narrow) setNarrowOutlineOpen(false); }}>{item.text}</button>)}</nav></>
+          <nav className="outline">{outline.length <= 1 ? <div className="outline-empty">{outline[0] && <button onClick={() => navigateHeading(outline[0].id)}>返回文首</button>}<p>这篇文档没有分节。</p></div> : outline.map((item) => <button key={item.id} className={activeHeading === item.id ? "active" : ""} aria-current={activeHeading === item.id ? "location" : undefined} style={{ paddingLeft: `${10 + Math.min(item.level - 1, 3) * 10}px` }} onClick={() => { navigateHeading(item.id); if (narrow) setNarrowOutlineOpen(false); }}>{item.text}</button>)}</nav></>
           : <div className="highlights-panel">
             <div className="highlight-section-title"><span>当前文档</span><small>{resolvedHighlights.filter((item) => !item.orphaned).length}/{resolvedHighlights.length}</small></div>
             {!resolvedHighlights.length && <p className="highlight-empty">选中正文后即可添加高亮。记录只保存在应用数据库中。</p>}

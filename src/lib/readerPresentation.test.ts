@@ -7,7 +7,7 @@ describe("canonical typography roles", () => {
     const reading = readerPresentation(DEFAULT_PREFERENCES);
     const study = readerPresentation({ ...DEFAULT_PREFERENCES, typographyProfile: "study" });
     expect(variable(reading, "--reader-font")).toBe(variable(study, "--reader-font"));
-    expect(String(variable(reading, "--heading-font"))).toContain("Georgia");
+    expect(String(variable(reading, "--heading-font"))).toContain("Cambria");
     expect(String(variable(study, "--heading-font"))).toContain("Segoe UI");
     expect(reading.classes).toContain("profile-reading");
     expect(study.classes).toContain("profile-study");

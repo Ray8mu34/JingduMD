@@ -26,7 +26,7 @@ function formatBytes(value: number): string {
 export default function SettingsPanel(props: Props) {
   const [legacyEditor, setLegacyEditor] = useState(props.initialSection === "system");
   return legacyEditor ? <LegacySettingsPanel {...props} initialTab={props.initialSection === "system" ? "system" : "presets"} onClose={() => { if (props.initialSection === "system") props.onClose(); else setLegacyEditor(false); }} />
-    : <SimpleReadingSettings value={props.value} onChange={props.onChange} onClose={props.onClose} onLegacyEdit={() => setLegacyEditor(true)} />;
+    : <SimpleReadingSettings value={props.value} sampleStyle={props.sampleStyle} onChange={props.onChange} onClose={props.onClose} onLegacyEdit={() => setLegacyEditor(true)} />;
 }
 
 function LegacySettingsPanel({ value, root, onChange, onClose, initialTab = "presets" }: Props & { initialTab?: Tab }) {
