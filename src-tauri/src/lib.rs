@@ -23,6 +23,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use url::Url;
 use walkdir::WalkDir;
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenTarget {
@@ -2066,7 +2069,7 @@ fn list_system_fonts() -> Result<Vec<SystemFont>, String> {
                 supports_cjk: supports(&face, "中文阅读漢字", 4),
                 supports_latin: supports(&face, "AaZz09", 6),
                 family,
-                faces: None,
+                faces: Some(macos::font_faces(&face)),
             });
         }
     }
@@ -2144,8 +2147,15 @@ fn open_external(state: State<AppState>, path: String, editor: String) -> Result
 }
 
 #[tauri::command]
-fn print_document(window: tauri::WebviewWindow) -> Result<(), String> {
-    window.print().map_err(|error| error.to_string())
+async fn print_document(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::print_document(window).await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.print().map_err(|error| error.to_string())
+    }
 }
 
 #[tauri::command]
@@ -2280,6 +2290,8 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            macos::install_menu(app.handle())?;
             #[cfg(target_os = "windows")]
             repair_installed_context_menu().ok();
             let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -2672,15 +2684,17 @@ mod tests {
     }
     #[test]
     fn versioned_preferences_round_trip_typography_and_appearance() {
-        let mut preferences = ReaderPreferences::default();
-        preferences.schema_version = 2;
-        preferences.style_mode = "canonical".into();
-        preferences.typography_profile = "study".into();
-        preferences.appearance = "nord".into();
-        preferences.legacy_appearance = Some("night".into());
-        preferences.chinese_heading_font = "SimSun".into();
-        preferences.latin_heading_font = "Georgia".into();
-        preferences.typography_overrides = serde_json::json!({"reading":{"chineseFont":"Noto Serif SC","latinFont":"Georgia","chineseHeadingFont":"SimSun","latinHeadingFont":"Georgia","codeFont":"Consolas"},"study":{"lineHeight":1.9}});
+        let preferences = ReaderPreferences {
+            schema_version: 2,
+            style_mode: "canonical".into(),
+            typography_profile: "study".into(),
+            appearance: "nord".into(),
+            legacy_appearance: Some("night".into()),
+            chinese_heading_font: "SimSun".into(),
+            latin_heading_font: "Georgia".into(),
+            typography_overrides: serde_json::json!({"reading":{"chineseFont":"Noto Serif SC","latinFont":"Georgia","chineseHeadingFont":"SimSun","latinHeadingFont":"Georgia","codeFont":"Consolas"},"study":{"lineHeight":1.9}}),
+            ..ReaderPreferences::default()
+        };
         let persisted = serde_json::to_string(&preferences).unwrap();
         let loaded: ReaderPreferences = serde_json::from_str(&persisted).unwrap();
         assert_eq!(loaded.schema_version, 2);

@@ -1843,12 +1843,14 @@ dependencies = [
 
 [[package]]
 name = "jingreader"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "core-text",
  "encoding_rs",
  "mime_guess",
  "notify",
+ "objc2-app-kit",
+ "objc2-web-kit",
  "parking_lot",
  "rusqlite",
  "serde",

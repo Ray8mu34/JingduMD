@@ -58,7 +58,7 @@ export default function FileTree({ root, selected, onOpen, onOpenNew, onSearch, 
   }, [root]);
   return <nav className="file-tree" aria-label="文件树">
     <div className="sidebar-heading"><FolderOpen /> <span className="folder-name" title={root}>{root.split(/[\\/]/).pop()}</span>
-      {onSearch && <button className="folder-search-button" onClick={onSearch} title="搜索文件夹 (Ctrl+P)" aria-label="搜索文件夹"><Search /></button>}
+      {onSearch && <button className="folder-search-button" onClick={onSearch} title={shortcutLabel("搜索文件夹 (Ctrl+P)")} aria-label="搜索文件夹"><Search /></button>}
       {onChooseFolder && <button onClick={onChooseFolder} title="更换文件夹" aria-label="更换文件夹"><FolderOpen /></button>}
     </div>
     {error && <div className="error-card">{error}</div>}

@@ -1,5 +1,18 @@
 # macOS 与跨平台开发
 
+## 当前开发状态（2026-09-26）
+
+已完成当前 0.8.1 代码的 macOS 功能适配。阅读界面、排版设置、文件树、搜索、高亮、阅读位置与对照窗口共用最新实现；此前已具备 Finder 文件打开、Dock 恢复、原生窗口、Command 快捷键及 Apple Silicon / Intel / Universal 打包入口。本轮代码审查补齐以下差异：
+
+- Core Text 除字体族与字形覆盖率外，返回同族常规、粗体、斜体和粗斜体的真实 PostScript 字体名，供正文和标题的 CSS `local()` 使用。系统未安装的样式不伪造字体名，保留浏览器回退。
+- 原生中文菜单接入打开文件/文件夹、对照窗口、文内查找、目录搜索、阅读设置、PDF 导出、侧栏和全屏。菜单动作只发给当前活动窗口；所有窗口隐藏时恢复主窗口。保留系统复制粘贴、服务、隐藏、退出等行为。
+- PDF 导出等待原生打印操作结束或取消后再恢复折叠内容与阅读位置，避免旧实现调用异步打印面板后立即恢复页面。清理操作只执行一次，不遗留 `afterprint` 监听器。
+- 文件树目录搜索提示使用 `⌘+P`；修复会阻塞发布脚本 `Clippy --all-targets -D warnings` 的已有测试初始化写法。
+
+打印使用 [WKWebView 的原生打印操作](https://developer.apple.com/documentation/webkit/wkwebview/printoperation(with:))，以 [NSPrintOperation.run](https://developer.apple.com/documentation/appkit/nsprintoperation/run()) 的返回时机作为恢复依据；字体变体使用 [Core Text 同族样式匹配](https://developer.apple.com/documentation/coretext/ctfontcreatecopywithsymbolictraits(_:_:_:_:_:))。实现集中在 `src-tauri/src/macos.rs`。
+
+本轮在 Windows 完成 72 项前端测试、TypeScript/Vite 构建及 18 项 Rust 测试。Mac 专属字体样式测试已加入原生 CI；此处不将 Windows 检查称为 Mac 原生编译或实机验证。按本轮任务范围，实机验收不作为开发完成的前置条件；未生成新的 Mac 安装包，也未配置 Developer ID 证书。下文 2026-09-05 的 CI 记录仅说明历史版本构建结果。
+
 ## 技术选择
 
 沿用 Tauri 2 + Rust + React/TypeScript。文件读取、SQLite FTS5 索引、目录监听、阅读状态、Markdown、公式和图表继续共用；仅系统字体、窗口、外部应用与安装入口按平台适配。迁移到 Electron 会增加运行时和打包体积，重写 SwiftUI 则需要维护第二套阅读界面，当前需求没有必要承担这些成本。
@@ -48,9 +61,11 @@ pnpm release:macos x86_64-apple-darwin
 | 功能 | Windows | macOS |
 | --- | --- | --- |
 | 主快捷键 | Ctrl | Command（⌘） |
+| 原生应用菜单 | 顶部应用工具栏 | 中文应用/文件/编辑/显示/窗口菜单，作用于活动阅读窗口 |
 | 窗口 | 自绘窗口控制 | 原生标题栏和红黄绿按钮 |
 | 主窗口关闭 | 关闭窗口 | 隐藏并保留阅读状态；Dock 点击恢复，⌘Q 退出 |
 | 字体枚举与字形检测 | GDI | Core Text |
+| 正文与标题字体样式 | GDI 真实字体名称 | Core Text 同族真实 PostScript 名称 |
 | 外部编辑 | 默认程序 / code 命令 | 文本编辑 / 已安装的 VS Code 应用 |
 | PDF | Microsoft Print to PDF | 打印面板 PDF → 存储为 PDF |
 | 文件打开 | 命令行与资源管理器 | Finder 打开方式、拖到 Dock 图标、命令行 |
@@ -59,6 +74,8 @@ pnpm release:macos x86_64-apple-darwin
 Mac 按路径传给 `/usr/bin/open`，不拼接 shell 命令，也不依赖 Finder 启动时的终端 PATH。文本编辑入口固定使用 TextEdit，避免将本程序设为默认 Markdown 阅读器后产生循环打开。所有读写边界和根目录限制继续由 Rust 后端检查。
 
 Finder 在页面监听就绪前发来的目标会暂存，页面注册监听后再消费。一次选择多个文件时只打开第一个本地目标，延续应用的单根目录模型；同根目录文章可用 ⌘+Enter 或 ⌘+双击打开对照窗口。主窗口切换目录仍关闭旧目录的对照窗口。
+
+原生菜单另外提供 `⌘⌥O` 打开文件夹、`⌘⇧N` 在对照窗口打开当前文章，以及系统全屏操作。保留现有 `⌘P` 搜索文件夹、`⌘⇧D` 导出 PDF 的快捷键约定。
 
 ## 签名与公证
 

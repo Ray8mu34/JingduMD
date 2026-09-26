@@ -1,6 +1,6 @@
 [package]
 name = "jingreader"
-version = "0.8.1"
+version = "0.8.2"
 description = "不接管目录的本地 Markdown 阅读器"
 authors = ["JingReader"]
 edition = "2021"
@@ -34,6 +34,8 @@ winreg = "0.55"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-text = "22"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPrintInfo", "NSPrintOperation"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "WKWebView", "objc2-app-kit"] }
 
 [profile.release]
 strip = true

@@ -27,6 +27,8 @@ import { formatModifiedTime, readingMetrics } from "./lib/reading";
 import { captureTextAnchor, restoreTextAnchor, type TextAnchor } from "./lib/readingAnchor";
 import { handleMenuKeys, trapTab } from "./lib/focus";
 import { useOutsideDismiss } from "./lib/useOutsideDismiss";
+import { useNativeMenu } from "./lib/nativeMenu";
+import { completePrintJob } from "./lib/printing";
 import type {
   DocumentPayload, ExternalChangeEvent, HighlightColor, IndexStatus, NewTextHighlight, OpenTarget,
   ReaderPreferences, ReadingPosition, RecentRoot, ResolvedHighlight, SystemFont, TextHighlight
@@ -279,7 +281,6 @@ export default function App() {
     const previousTitle = document.title;
     document.title = documentRef.current.name.replace(/\.(md|markdown)$/i, "") || "静读文档";
     const restore = () => { document.title = previousTitle; for (const button of folds) { if (button.isConnected && button.getAttribute("aria-expanded") === "true") button.click(); } window.dispatchEvent(new Event("jingreader:restore-after-print")); const pending = pendingAnchor.current; if (pending && scrollRef.current && pending.path === documentRef.current?.path) restoreTextAnchor(scrollRef.current, pending.anchor); pendingAnchor.current = null; };
-    window.addEventListener("afterprint", restore, { once: true });
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const deadline = performance.now() + 5000;
     while (performance.now() < deadline) {
@@ -290,10 +291,9 @@ export default function App() {
       await new Promise((resolve) => window.setTimeout(resolve, 100));
     }
     try {
-      if (isMac && isTauri()) await invoke("print_document");
-      else window.print();
+      const nativeCompletion = isMac && isTauri();
+      await completePrintJob(() => nativeCompletion ? invoke("print_document") : window.print(), restore, nativeCompletion);
     } catch (error) { notify(`无法打开打印窗口：${errorText(error)}`); }
-    finally { restore(); }
   }, [notify, preferences, preserveAnchor]);
 
   const refreshRecentRoots = useCallback(() => {
@@ -630,8 +630,23 @@ export default function App() {
     return () => stopListening?.();
   }, []);
 
+  useNativeMenu((action) => {
+    switch (action) {
+      case "reader-open-file": void chooseFile(); break;
+      case "reader-open-folder": void chooseFolder(); break;
+      case "reader-new-window": if (doc) openDocumentInNewWindow(doc.path); break;
+      case "reader-export-pdf": if (doc) setPrintOptionsOpen(true); break;
+      case "reader-find": if (doc) setFindOpen(true); break;
+      case "reader-search": if (root) openFolderSearch(); break;
+      case "reader-settings": setSettingsSection("reading"); setSettingsOpen(true); break;
+      case "reader-tree": if (root) toggleTree(); break;
+      case "reader-outline": if (doc) toggleOutline(); break;
+    }
+  });
+
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
       if (event.altKey && event.key === "ArrowLeft") { event.preventDefault(); navigateHistory("back"); return; }
       if (event.altKey && event.key === "ArrowRight") { event.preventDefault(); navigateHistory("forward"); return; }
       if (primaryModifier(event) && !event.shiftKey && event.key.toLowerCase() === "o") { event.preventDefault(); void chooseFile(); }

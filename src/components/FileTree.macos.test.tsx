@@ -15,10 +15,11 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn((command: string) => {
 it("opens a comparison window with Command+Enter and Command+double-click on Mac", async () => {
   const onOpen = vi.fn();
   const onOpenNew = vi.fn();
-  const { getByText } = render(<FileTree root="/Users/me/资料" selected={null} onOpen={onOpen} onOpenNew={onOpenNew} />);
+  const { getByText, getByRole } = render(<FileTree root="/Users/me/资料" selected={null} onOpen={onOpen} onOpenNew={onOpenNew} onSearch={vi.fn()} />);
   await waitFor(() => expect(getByText("第一章.md")).toBeInTheDocument());
   const row = getByText("第一章.md").closest("button")!;
   expect(row.title).toContain("⌘+Enter");
+  expect(getByRole("button", { name: "搜索文件夹" })).toHaveAttribute("title", "搜索文件夹 (⌘+P)");
   fireEvent.keyDown(row, { key: "Enter", ctrlKey: true });
   expect(onOpenNew).not.toHaveBeenCalled();
   fireEvent.keyDown(row, { key: "Enter", metaKey: true });
