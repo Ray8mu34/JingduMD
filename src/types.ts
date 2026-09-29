@@ -54,7 +54,7 @@ export type CustomReaderProfile = {
 };
 
 export type TypographyProfileId = "reading" | "study";
-export type AppearanceId = "warm" | "white" | "night" | "nord";
+export type AppearanceId = "warm" | "white" | "night" | "nord" | "humanist" | "eink";
 export type TypographyOverride = Partial<Pick<ReadingRecipe,
   "lineHeight" | "contentWidth" | "paragraphSpacing" | "fontFamily" | "headingFont" | "codeFont" |
   "headingScale" | "headingDensity" | "paragraphStyle" | "firstLineIndent" | "textAlign" |
@@ -63,6 +63,7 @@ export type TypographyOverride = Partial<Pick<ReadingRecipe,
 export type PersonalTypography = { id: string; name: string; profile: TypographyProfileId; overrides: TypographyOverride };
 
 export type ReaderPreferences = ReadingRecipe & {
+  formulaAlign: "center" | "left";
   schemaVersion: number;
   styleMode: "canonical" | "legacy";
   typographyProfile: TypographyProfileId;
@@ -110,7 +111,8 @@ export type NewTextHighlight = Omit<TextHighlight, "id" | "root" | "createdMs" |
 export type ResolvedHighlight = TextHighlight & { range: Range | null; orphaned: boolean };
 
 export const DEFAULT_PREFERENCES: ReaderPreferences = {
-  schemaVersion: 2, styleMode: "canonical", typographyProfile: "reading", appearance: "warm", legacyAppearance: null,
+  formulaAlign: "center",
+  schemaVersion: 3, styleMode: "canonical", typographyProfile: "reading", appearance: "warm", legacyAppearance: null,
   typographyOverrides: { reading: {}, study: {} },
   personalTypographies: [],
   theme: "paper", fontSize: 18.5, lineHeight: 1.82, contentWidth: 780,

@@ -2,8 +2,10 @@ import { fireEvent, render, waitFor } from "@testing-library/react";
 import MarkdownReader, { isLongDocument, mermaidViewBoxWidth, sanitizeMermaidSvg } from "./MarkdownReader";
 import type { DocumentPayload } from "../types";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { imageSizeKey, readImageWidth } from "../lib/imageSizing";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(() => Promise.resolve()) }));
+vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((command: string) => command === "read_remote_image"
@@ -12,6 +14,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 describe("MarkdownReader mathematics", () => {
+  it("renders fenced math as a display equation without a code toolbar", () => {
+    const document: DocumentPayload = { path: "math.md", name: "math.md", modifiedMs: 0, size: 0, content: "```math\nx^2 + y^2 = 1\n```\n\nInline $x$." };
+    const { container } = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
+    expect(container.querySelectorAll(".math-display")).toHaveLength(1);
+    expect(container.querySelectorAll(".math-inline")).toHaveLength(1);
+    expect(container.querySelector(".code-block")).toBeNull();
+  });
   it("renders dollar and TeX delimiters while preserving code", () => {
     const document: DocumentPayload = {
       path: "C:\\notes\\math.md",
@@ -142,11 +151,11 @@ describe("MarkdownReader mathematics", () => {
       content: "![示例图](https://images.example.test/preview.png)"
     };
     const { getByRole, queryByRole } = render(<MarkdownReader document={document} night={false} remoteImagePolicy="allow" onOpenDocument={() => {}} />);
-    await waitFor(() => expect(getByRole("button", { name: "放大" })).toBeInTheDocument());
+    await waitFor(() => expect(getByRole("img", { name: "示例图" })).toBeInTheDocument());
     fireEvent.click(getByRole("button", { name: "折叠" }));
     expect(getByRole("button", { name: "展开图片" })).toBeInTheDocument();
     fireEvent.click(getByRole("button", { name: "展开图片" }));
-    fireEvent.click(getByRole("button", { name: "放大" }));
+    fireEvent.click(getByRole("img", { name: "示例图" }));
     expect(getByRole("dialog", { name: "示例图" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(queryByRole("dialog", { name: "示例图" })).not.toBeInTheDocument();
@@ -161,5 +170,56 @@ describe("MarkdownReader mathematics", () => {
     fireEvent.click(badge);
     expect(openUrl).toHaveBeenCalledWith("https://example.test/build");
     expect(queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("remembers inline display width per document and keeps preview zoom independent", async () => {
+    const source = "https://images.example.test/sizing.png";
+    const document: DocumentPayload = {
+      path: "C:\\notes\\sizing.md", name: "sizing.md", modifiedMs: 0, size: 0,
+      content: `![尺寸示例](${source})`
+    };
+    const props = { document, night: false, remoteImagePolicy: "allow" as const, onOpenDocument: () => {} };
+    const view = render(<MarkdownReader {...props} />);
+    const img = await view.findByAltText("尺寸示例");
+    Object.defineProperty(img, "naturalWidth", { value: 800 });
+    fireEvent.load(img);
+    fireEvent.click(view.getByTitle("调整显示大小"));
+    fireEvent.change(view.getByRole("spinbutton", { name: "原图缩放百分比" }), { target: { value: "40" } });
+    expect(view.getByAltText("尺寸示例").parentElement).toHaveStyle({ width: "320px" });
+    expect(readImageWidth(imageSizeKey(document.path, source))).toBe(40);
+    fireEvent.keyDown(view.getByRole("spinbutton"), { key: "Escape" });
+    expect(view.queryByRole("spinbutton")).toBeNull();
+    expect(view.getByTitle("调整显示大小")).toHaveFocus();
+    fireEvent.click(view.getByAltText("尺寸示例"));
+    expect(view.getByRole("dialog").querySelector("img")?.style.width).toBe("");
+    fireEvent.keyDown(window, { key: "Escape" });
+    view.rerender(<MarkdownReader {...props} document={{ ...document, path: "C:\\notes\\other.md" }} />);
+    expect((await view.findByAltText("尺寸示例")).parentElement).toHaveStyle({ maxWidth: "100%" });
+    view.rerender(<MarkdownReader {...props} />);
+    const restored = await view.findByAltText("尺寸示例");
+    Object.defineProperty(restored, "naturalWidth", { value: 800 }); fireEvent.load(restored);
+    expect(restored.parentElement).toHaveStyle({ width: "320px" });
+    fireEvent.click(view.getByTitle("调整显示大小"));
+    fireEvent.click(view.getByRole("button", { name: "适应正文" }));
+    expect(view.getByAltText("尺寸示例").style.width).toBe("");
+    expect(readImageWidth(imageSizeKey(document.path, source))).toBeNull();
+  });
+
+  it("ignores invalid saved sizes and still resizes when storage is unavailable", async () => {
+    const key = imageSizeKey("test", "test");
+    for (const value of ["NaN", "0", "-10", "401"]) {
+      localStorage.setItem(key, value);
+      expect(readImageWidth(key)).toBeNull();
+    }
+    localStorage.removeItem(key);
+    const storage = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota"); });
+    try {
+      const document: DocumentPayload = { path: "no-storage.md", name: "no-storage.md", size: 0, modifiedMs: 0, content: "![图](https://images.example.test/unavailable.png)" };
+      const view = render(<MarkdownReader document={document} night={false} remoteImagePolicy="allow" onOpenDocument={() => {}} />);
+      const img = await view.findByAltText("图"); Object.defineProperty(img, "naturalWidth", { value: 800 }); fireEvent.load(img);
+      fireEvent.click(view.getByTitle("调整显示大小"));
+      fireEvent.change(view.getByRole("spinbutton"), { target: { value: "60" } });
+      expect(view.getByAltText("图").parentElement).toHaveStyle({ width: "480px" });
+    } finally { storage.mockRestore(); }
   });
 });

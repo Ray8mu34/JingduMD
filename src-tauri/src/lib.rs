@@ -3,6 +3,7 @@ use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsStr,
@@ -19,9 +20,12 @@ use std::{
     time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager};
+mod windows;
 use url::Url;
 use walkdir::WalkDir;
+use windows::{create_reader_window, open_external_target, WindowRegistry, WindowState};
+mod annotations;
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -160,6 +164,7 @@ struct ReaderPreferences {
     code_wrap: bool,
     code_scale: f64,
     formula_scale: f64,
+    formula_align: String,
     image_brightness: f64,
     image_style: String,
     background_warmth: f64,
@@ -212,6 +217,7 @@ impl Default for ReaderPreferences {
             code_wrap: false,
             code_scale: 0.84,
             formula_scale: 1.0,
+            formula_align: "center".to_owned(),
             image_brightness: 100.0,
             image_style: "soft".to_owned(),
             background_warmth: 0.0,
@@ -267,7 +273,7 @@ struct ReadingPosition {
     document_ratio: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TextHighlight {
     id: i64,
@@ -304,14 +310,17 @@ struct HighlightsChanged {
     source: String,
 }
 
-struct AppState {
+pub(crate) struct AppState {
+    label: String,
+    window_label: String,
     current_root: Mutex<Option<PathBuf>>,
-    db: Mutex<Connection>,
+    db: Arc<Mutex<Connection>>,
+    preferences_lock: Arc<Mutex<()>>,
+    reading_positions: Mutex<HashMap<String, ReadingPosition>>,
     watcher: Mutex<Option<RecommendedWatcher>>,
     preferences_path: PathBuf,
     db_path: PathBuf,
     startup_target: Mutex<StartupTarget>,
-    window_targets: Mutex<HashMap<String, OpenTarget>>,
     index_generation: AtomicU64,
     search_generation: AtomicU64,
     index_status: Mutex<IndexStatus>,
@@ -324,7 +333,7 @@ struct StartupTarget {
 
 static READER_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-const DB_SCHEMA_VERSION: i64 = 3;
+const DB_SCHEMA_VERSION: i64 = 5;
 
 fn now_ms(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
@@ -354,6 +363,9 @@ fn init_db(path: &Path) -> Result<Connection, String> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|e| e.to_string())?;
+    if version > DB_SCHEMA_VERSION {
+        return Err("数据库由更新版本创建，请使用较新版本的静读打开".into());
+    }
     if version < 2 {
         let transaction = connection
             .unchecked_transaction()
@@ -420,6 +432,18 @@ fn init_db(path: &Path) -> Result<Connection, String> {
              CREATE INDEX IF NOT EXISTS text_highlights_root_recent_idx ON text_highlights(root, updated_ms DESC);",
         )
         .map_err(|e| e.to_string())?;
+    annotations::migrate(&connection, version)?;
+    if version < 5 {
+        // Search is a rebuildable cache. Keep reading positions and annotations intact.
+        connection.execute_batch("BEGIN;
+          DROP TABLE documents_fts;
+          DROP TABLE documents;
+          CREATE TABLE documents(id INTEGER PRIMARY KEY, path TEXT NOT NULL, root TEXT NOT NULL,
+            name TEXT NOT NULL, modified_ms INTEGER NOT NULL, size INTEGER NOT NULL, UNIQUE(root,path));
+          CREATE INDEX documents_root_idx ON documents(root);
+          CREATE VIRTUAL TABLE documents_fts USING fts5(name,content,content='',contentless_delete=1,tokenize='trigram');
+          COMMIT;").map_err(|error| error.to_string())?;
+    }
     connection
         .pragma_update(None, "user_version", DB_SCHEMA_VERSION)
         .map_err(|e| e.to_string())?;
@@ -511,7 +535,7 @@ fn to_string(path: &Path) -> String {
 }
 
 #[tauri::command]
-fn open_target(app: AppHandle, state: State<AppState>, path: String) -> Result<OpenTarget, String> {
+fn open_target(state: WindowState, path: String) -> Result<OpenTarget, String> {
     let target = canonical(&path)?;
     let (root, selected_file) = if target.is_file() {
         if !is_markdown(&target) {
@@ -528,16 +552,16 @@ fn open_target(app: AppHandle, state: State<AppState>, path: String) -> Result<O
     };
     let changed = state.current_root.lock().as_ref() != Some(&root);
     if changed {
-        for (label, window) in app.webview_windows() {
-            if label.starts_with("reader-") {
-                window.close().ok();
-            }
-        }
-        state.window_targets.lock().clear();
+        state.watcher.lock().take();
         state.index_generation.fetch_add(1, Ordering::AcqRel);
         state.search_generation.fetch_add(1, Ordering::AcqRel);
     }
     *state.current_root.lock() = Some(root.clone());
+    state.startup_target.lock().path = None;
+    *state.index_status.lock() = IndexStatus {
+        root: to_string(&root),
+        ..IndexStatus::default()
+    };
     state
         .db
         .lock()
@@ -553,51 +577,18 @@ fn open_target(app: AppHandle, state: State<AppState>, path: String) -> Result<O
     })
 }
 
-fn open_in_new_window_impl(app: &AppHandle, state: &AppState, path: &str) -> Result<(), String> {
-    let file = guarded_path(state, path)?;
-    if !file.is_file() || !is_markdown(&file) {
-        return Err("只能在新窗口中打开 Markdown 文件".into());
-    }
-    let root = state.current_root.lock().clone().ok_or("尚未打开文件夹")?;
-    let target = OpenTarget {
-        root: to_string(&root),
-        selected_file: Some(to_string(&file)),
-    };
-    let label = format!(
-        "reader-{}",
-        READER_WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed)
-    );
-    state.window_targets.lock().insert(label.clone(), target);
-    let result =
-        tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::App("index.html".into()))
-            .title("静读 Markdown")
-            .inner_size(1280.0, 820.0)
-            .min_inner_size(760.0, 520.0)
-            .center()
-            .decorations(cfg!(target_os = "macos"))
-            .build();
-    if let Err(error) = result {
-        state.window_targets.lock().remove(&label);
-        return Err(error.to_string());
-    }
-    Ok(())
+#[tauri::command]
+async fn open_in_new_window(app: AppHandle, path: Option<String>) -> Result<(), String> {
+    create_reader_window(&app, path)
 }
 
 #[tauri::command]
-fn open_in_new_window(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
-    open_in_new_window_impl(&app, &state, &path)
+fn close_tab(app: AppHandle, state: WindowState) {
+    app.state::<WindowRegistry>().remove(&state.label);
 }
 
 #[tauri::command]
-fn consume_window_target(
-    window: tauri::WebviewWindow,
-    state: State<AppState>,
-) -> Option<OpenTarget> {
-    state.window_targets.lock().remove(window.label())
-}
-
-#[tauri::command]
-fn list_directory(state: State<AppState>, path: String) -> Result<Vec<DirectoryEntry>, String> {
+fn list_directory(state: WindowState, path: String) -> Result<Vec<DirectoryEntry>, String> {
     let directory = guarded_path(&state, &path)?;
     if !directory.is_dir() {
         return Err("目标不是文件夹".into());
@@ -638,7 +629,7 @@ fn list_directory(state: State<AppState>, path: String) -> Result<Vec<DirectoryE
 }
 
 #[tauri::command]
-fn read_document(state: State<AppState>, path: String) -> Result<DocumentPayload, String> {
+fn read_document(state: WindowState, path: String) -> Result<DocumentPayload, String> {
     let file = guarded_path(&state, &path)?;
     if !file.is_file() || !is_markdown(&file) {
         return Err("目标不是 Markdown 文件".into());
@@ -647,6 +638,14 @@ fn read_document(state: State<AppState>, path: String) -> Result<DocumentPayload
     if metadata.len() > 64 * 1024 * 1024 {
         return Err("文档超过 64MB 安全上限".into());
     }
+    let content = read_text(&file)?;
+    let root = state.current_root.lock().clone().ok_or("尚未打开文件夹")?;
+    annotations::observe(
+        &state.db.lock(),
+        &to_string(&file),
+        &to_string(&root),
+        &content,
+    )?;
     Ok(DocumentPayload {
         path: to_string(&file),
         name: file
@@ -654,14 +653,14 @@ fn read_document(state: State<AppState>, path: String) -> Result<DocumentPayload
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned(),
-        content: read_text(&file)?,
+        content,
         modified_ms: metadata.modified().map(now_ms).unwrap_or_default(),
         size: metadata.len(),
     })
 }
 
 #[tauri::command]
-fn read_asset(state: State<AppState>, path: String) -> Result<AssetPayload, String> {
+fn read_asset(state: WindowState, path: String) -> Result<AssetPayload, String> {
     let file = guarded_path(&state, &path)?;
     if !file.is_file() {
         return Err("资源不存在".into());
@@ -856,10 +855,23 @@ fn collect_markdown(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn publish_index_status(app: &AppHandle, status: IndexStatus) {
-    let state = app.state::<AppState>();
+fn publish_index_status(app: &AppHandle, state: &AppState, status: IndexStatus) {
     *state.index_status.lock() = status.clone();
-    app.emit("index-status", status).ok();
+    #[derive(Clone, Serialize)]
+    struct ScopedStatus {
+        #[serde(flatten)]
+        status: IndexStatus,
+        scope: String,
+    }
+    app.emit_to(
+        &state.window_label,
+        "index-status",
+        ScopedStatus {
+            status,
+            scope: state.label.clone(),
+        },
+    )
+    .ok();
 }
 
 fn index_is_cancelled(state: &AppState, root: &Path, generation: u64) -> bool {
@@ -893,6 +905,7 @@ fn clear_root_index(state: &AppState, root: &Path) -> Result<(), String> {
 
 fn index_root_sync(
     app: AppHandle,
+    state: Arc<AppState>,
     root: PathBuf,
     generation: u64,
     force: bool,
@@ -900,13 +913,13 @@ fn index_root_sync(
     let files = collect_markdown(&root);
     let total = files.len();
     let root_string = to_string(&root);
-    let state = app.state::<AppState>();
     let mut seen = HashSet::with_capacity(total);
     if force {
         clear_root_index(&state, &root)?;
     }
     publish_index_status(
         &app,
+        &state,
         IndexStatus {
             root: root_string.clone(),
             indexed: 0,
@@ -921,6 +934,7 @@ fn index_root_sync(
         if index_is_cancelled(&state, &root, generation) {
             publish_index_status(
                 &app,
+                &state,
                 IndexStatus {
                     root: root_string,
                     indexed: index,
@@ -958,6 +972,7 @@ fn index_root_sync(
         if index % 50 == 0 || index + 1 == total {
             publish_index_status(
                 &app,
+                &state,
                 IndexStatus {
                     root: root_string.clone(),
                     indexed: index + 1,
@@ -993,12 +1008,16 @@ fn index_root_sync(
             .execute("DELETE FROM documents_fts WHERE rowid=?1", params![id])
             .map_err(|e| e.to_string())?;
         transaction
-            .execute("DELETE FROM documents WHERE path=?1", params![stale])
+            .execute(
+                "DELETE FROM documents WHERE path=?1 AND root=?2",
+                params![stale, root_string],
+            )
             .map_err(|e| e.to_string())?;
         transaction.commit().map_err(|e| e.to_string())?;
     }
     publish_index_status(
         &app,
+        &state,
         IndexStatus {
             root: root_string,
             indexed: total,
@@ -1013,11 +1032,7 @@ fn index_root_sync(
 }
 
 #[tauri::command]
-async fn index_root(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    root: String,
-) -> Result<(), String> {
+async fn index_root(app: AppHandle, state: WindowState, root: String) -> Result<(), String> {
     let candidate = canonical(&root)?;
     let current = state.current_root.lock().clone().ok_or("尚未打开文件夹")?;
     if candidate != current {
@@ -1025,7 +1040,7 @@ async fn index_root(
     }
     let generation = state.index_generation.fetch_add(1, Ordering::AcqRel) + 1;
     tauri::async_runtime::spawn_blocking(move || {
-        index_root_sync(app, candidate, generation, false)
+        index_root_sync(app, state.0, candidate, generation, false)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1033,29 +1048,27 @@ async fn index_root(
 }
 
 #[tauri::command]
-fn cancel_index(app: AppHandle, state: State<AppState>) {
+fn cancel_index(app: AppHandle, state: WindowState) {
     state.index_generation.fetch_add(1, Ordering::AcqRel);
     let mut status = state.index_status.lock().clone();
     status.running = false;
     status.cancelled = true;
     status.phase = "cancelled".into();
-    publish_index_status(&app, status);
+    publish_index_status(&app, &state, status);
 }
 
 #[tauri::command]
-async fn rebuild_index(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    root: String,
-) -> Result<(), String> {
+async fn rebuild_index(app: AppHandle, state: WindowState, root: String) -> Result<(), String> {
     let root = canonical(root)?;
     if state.current_root.lock().as_deref() != Some(root.as_path()) {
         return Err("重建目标不是当前根目录".into());
     }
     let generation = state.index_generation.fetch_add(1, Ordering::AcqRel) + 1;
-    tauri::async_runtime::spawn_blocking(move || index_root_sync(app, root, generation, true))
-        .await
-        .map_err(|e| e.to_string())??;
+    tauri::async_runtime::spawn_blocking(move || {
+        index_root_sync(app, state.0, root, generation, true)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     Ok(())
 }
 
@@ -1112,23 +1125,22 @@ fn snippet_for_query(content: &str, query: &str) -> Option<String> {
 
 #[tauri::command]
 async fn search_documents(
-    app: AppHandle,
+    state: WindowState,
     root: String,
     query: String,
     limit: u32,
 ) -> Result<SearchResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || search_documents_sync(&app, root, query, limit))
+    tauri::async_runtime::spawn_blocking(move || search_documents_sync(&state, root, query, limit))
         .await
         .map_err(|error| error.to_string())?
 }
 
 fn search_documents_sync(
-    app: &AppHandle,
+    state: &AppState,
     root: String,
     query: String,
     limit: u32,
 ) -> Result<SearchResponse, String> {
-    let state = app.state::<AppState>();
     let root = canonical(root)?;
     let current = state.current_root.lock().clone().ok_or("尚未打开文件夹")?;
     if root != current {
@@ -1255,8 +1267,8 @@ fn update_index_path(state: &AppState, root: &Path, path: &Path) -> Result<(), S
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let existing_id: Option<i64> = transaction
         .query_row(
-            "SELECT id FROM documents WHERE path=?1",
-            params![path_string],
+            "SELECT id FROM documents WHERE path=?1 AND root=?2",
+            params![path_string, root_string],
             |row| row.get(0),
         )
         .optional()
@@ -1265,14 +1277,14 @@ fn update_index_path(state: &AppState, root: &Path, path: &Path) -> Result<(), S
         transaction
             .execute(
                 "INSERT INTO documents(path,root,name,modified_ms,size) VALUES(?1,?2,?3,?4,?5)
-                 ON CONFLICT(path) DO UPDATE SET root=excluded.root,name=excluded.name,modified_ms=excluded.modified_ms,size=excluded.size",
+                 ON CONFLICT(root,path) DO UPDATE SET name=excluded.name,modified_ms=excluded.modified_ms,size=excluded.size",
                 params![path_string, root_string, name, metadata.modified().map(now_ms).unwrap_or_default(), metadata.len()],
             )
             .map_err(|e| e.to_string())?;
         let id: i64 = transaction
             .query_row(
-                "SELECT id FROM documents WHERE path=?1",
-                params![path_string],
+                "SELECT id FROM documents WHERE path=?1 AND root=?2",
+                params![path_string, root_string],
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())?;
@@ -1289,7 +1301,10 @@ fn update_index_path(state: &AppState, root: &Path, path: &Path) -> Result<(), S
                 .map_err(|e| e.to_string())?;
         }
         transaction
-            .execute("DELETE FROM documents WHERE path=?1", params![path_string])
+            .execute(
+                "DELETE FROM documents WHERE path=?1 AND root=?2",
+                params![path_string],
+            )
             .map_err(|e| e.to_string())?;
     }
     transaction.commit().map_err(|e| e.to_string())
@@ -1305,24 +1320,31 @@ fn ignored_watch_path(root: &Path, path: &Path) -> bool {
 
 fn apply_watch_batch(
     app: &AppHandle,
+    state: &Arc<AppState>,
     root: &Path,
     pending: &HashMap<PathBuf, String>,
     reconcile: bool,
 ) {
-    let state = app.state::<AppState>();
     if state.current_root.lock().as_deref() != Some(root) {
         return;
     }
     if reconcile {
         let generation = state.index_generation.fetch_add(1, Ordering::AcqRel) + 1;
-        let _ = index_root_sync(app.clone(), root.to_path_buf(), generation, false);
-        app.emit("tree-changed", to_string(root)).ok();
+        let _ = index_root_sync(
+            app.clone(),
+            state.clone(),
+            root.to_path_buf(),
+            generation,
+            false,
+        );
+        app.emit_to(&state.window_label, "tree-changed", to_string(root))
+            .ok();
         return;
     }
     for (path, kind) in pending {
         let mut updated = false;
         for attempt in 0..3 {
-            if update_index_path(&state, root, path).is_ok() {
+            if update_index_path(state, root, path).is_ok() {
                 updated = true;
                 break;
             }
@@ -1331,7 +1353,8 @@ fn apply_watch_batch(
             }
         }
         if updated {
-            app.emit(
+            app.emit_to(
+                &state.window_label,
                 "external-change",
                 ExternalChangeEvent {
                     path: to_string(path),
@@ -1342,7 +1365,8 @@ fn apply_watch_batch(
         }
     }
     if !pending.is_empty() {
-        app.emit("tree-changed", to_string(root)).ok();
+        app.emit_to(&state.window_label, "tree-changed", to_string(root))
+            .ok();
     }
 }
 
@@ -1368,7 +1392,7 @@ fn queue_watch_event(
 }
 
 #[tauri::command]
-fn start_watch(app: AppHandle, state: State<AppState>, root: String) -> Result<(), String> {
+fn start_watch(app: AppHandle, state: WindowState, root: String) -> Result<(), String> {
     let root = canonical(root)?;
     let current = state.current_root.lock().clone().ok_or("尚未打开文件夹")?;
     if root != current {
@@ -1397,14 +1421,14 @@ fn start_watch(app: AppHandle, state: State<AppState>, root: String) -> Result<(
                 Ok(event) => queue_watch_event(&watched_root, event, &mut pending, &mut reconcile),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if !pending.is_empty() || reconcile {
-                        apply_watch_batch(&app, &watched_root, &pending, reconcile);
+                        apply_watch_batch(&app, &state.0, &watched_root, &pending, reconcile);
                         pending.clear();
                         reconcile = false;
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     if !pending.is_empty() || reconcile {
-                        apply_watch_batch(&app, &watched_root, &pending, reconcile);
+                        apply_watch_batch(&app, &state.0, &watched_root, &pending, reconcile);
                     }
                     break;
                 }
@@ -1415,7 +1439,7 @@ fn start_watch(app: AppHandle, state: State<AppState>, root: String) -> Result<(
 }
 
 #[tauri::command]
-fn load_expanded_paths(state: State<AppState>, root: String) -> Result<Vec<String>, String> {
+fn load_expanded_paths(state: WindowState, root: String) -> Result<Vec<String>, String> {
     let root = canonical(root)?;
     let current = state.current_root.lock().clone().ok_or("尚未打开文件夹")?;
     if root != current {
@@ -1432,7 +1456,7 @@ fn load_expanded_paths(state: State<AppState>, root: String) -> Result<Vec<Strin
 }
 
 #[tauri::command]
-fn set_path_expanded(state: State<AppState>, path: String, expanded: bool) -> Result<(), String> {
+fn set_path_expanded(state: WindowState, path: String, expanded: bool) -> Result<(), String> {
     let path = guarded_path(&state, &path)?;
     if !path.is_dir() {
         return Err("展开状态只能用于文件夹".into());
@@ -1461,8 +1485,12 @@ fn set_path_expanded(state: State<AppState>, path: String, expanded: bool) -> Re
 }
 
 #[tauri::command]
-fn save_reading_position(state: State<AppState>, position: ReadingPosition) -> Result<(), String> {
+fn save_reading_position(state: WindowState, position: ReadingPosition) -> Result<(), String> {
     let path = guarded_path(&state, &position.path)?;
+    state
+        .reading_positions
+        .lock()
+        .insert(to_string(&path), position.clone());
     state.db.lock().execute(
         "INSERT INTO reading_positions(path,heading_id,heading_ratio,document_ratio,updated_ms) VALUES(?1,?2,?3,?4,?5)
          ON CONFLICT(path) DO UPDATE SET heading_id=excluded.heading_id,heading_ratio=excluded.heading_ratio,document_ratio=excluded.document_ratio,updated_ms=excluded.updated_ms",
@@ -1473,10 +1501,18 @@ fn save_reading_position(state: State<AppState>, position: ReadingPosition) -> R
 
 #[tauri::command]
 fn get_reading_position(
-    state: State<AppState>,
+    state: WindowState,
     path: String,
 ) -> Result<Option<ReadingPosition>, String> {
     let path = guarded_path(&state, &path)?;
+    if let Some(position) = state
+        .reading_positions
+        .lock()
+        .get(&to_string(&path))
+        .cloned()
+    {
+        return Ok(Some(position));
+    }
     state
         .db
         .lock()
@@ -1538,13 +1574,13 @@ const HIGHLIGHT_COLUMNS: &str =
 
 #[tauri::command]
 fn list_document_highlights(
-    state: State<AppState>,
+    state: WindowState,
     path: String,
 ) -> Result<Vec<TextHighlight>, String> {
     let path = guarded_path(&state, &path)?;
     let connection = state.db.lock();
     let sql = format!(
-        "SELECT {HIGHLIGHT_COLUMNS} FROM text_highlights WHERE path=?1 ORDER BY start_offset, created_ms"
+        "SELECT {HIGHLIGHT_COLUMNS} FROM text_highlights WHERE path=?1 AND deleted_ms IS NULL ORDER BY start_offset, created_ms"
     );
     let mut statement = connection.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = statement
@@ -1556,13 +1592,13 @@ fn list_document_highlights(
 
 #[tauri::command]
 fn list_recent_highlights(
-    state: State<AppState>,
+    state: WindowState,
     limit: Option<usize>,
 ) -> Result<Vec<TextHighlight>, String> {
     let root = state.current_root.lock().clone().ok_or("尚未打开文件夹")?;
     let connection = state.db.lock();
     let sql = format!(
-        "SELECT {HIGHLIGHT_COLUMNS} FROM text_highlights WHERE root=?1 ORDER BY updated_ms DESC LIMIT ?2"
+        "SELECT {HIGHLIGHT_COLUMNS} FROM text_highlights WHERE root=?1 AND deleted_ms IS NULL ORDER BY updated_ms DESC LIMIT ?2"
     );
     let mut statement = connection.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = statement
@@ -1578,8 +1614,7 @@ fn list_recent_highlights(
 #[tauri::command]
 fn create_text_highlight(
     app: AppHandle,
-    window: tauri::WebviewWindow,
-    state: State<AppState>,
+    state: WindowState,
     highlight: NewTextHighlight,
 ) -> Result<TextHighlight, String> {
     validate_highlight_draft(&highlight)?;
@@ -1592,12 +1627,14 @@ fn create_text_highlight(
     let path_string = to_string(&path);
     let root_string = to_string(&root);
     let connection = state.db.lock();
+    let document_id =
+        annotations::ensure_document(&connection, &path_string, &root_string, &read_text(&path)?)?;
     connection
         .execute(
-            "INSERT INTO text_highlights(path,root,quote,prefix,suffix,start_offset,end_offset,heading_id,color,created_ms,updated_ms)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
+            "INSERT INTO text_highlights(path,root,quote,prefix,suffix,start_offset,end_offset,heading_id,color,created_ms,updated_ms,document_id,uid)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10,?11,lower(hex(randomblob(16))))",
             params![path_string, root_string, highlight.quote, highlight.prefix, highlight.suffix,
-                highlight.start_offset as i64, highlight.end_offset as i64, highlight.heading_id, highlight.color, timestamp],
+                highlight.start_offset as i64, highlight.end_offset as i64, highlight.heading_id, highlight.color, timestamp, document_id],
         )
         .map_err(|e| e.to_string())?;
     let id = connection.last_insert_rowid();
@@ -1610,7 +1647,7 @@ fn create_text_highlight(
         "highlights-updated",
         HighlightsChanged {
             path: path_string,
-            source: window.label().to_owned(),
+            source: state.label.clone(),
         },
     )
     .ok();
@@ -1620,8 +1657,7 @@ fn create_text_highlight(
 #[tauri::command]
 fn update_text_highlight_color(
     app: AppHandle,
-    window: tauri::WebviewWindow,
-    state: State<AppState>,
+    state: WindowState,
     id: i64,
     color: String,
 ) -> Result<(), String> {
@@ -1651,7 +1687,7 @@ fn update_text_highlight_color(
         "highlights-updated",
         HighlightsChanged {
             path,
-            source: window.label().to_owned(),
+            source: state.label.clone(),
         },
     )
     .ok();
@@ -1659,12 +1695,7 @@ fn update_text_highlight_color(
 }
 
 #[tauri::command]
-fn delete_text_highlight(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    state: State<AppState>,
-    id: i64,
-) -> Result<(), String> {
+fn delete_text_highlight(app: AppHandle, state: WindowState, id: i64) -> Result<(), String> {
     let root = state.current_root.lock().clone().ok_or("尚未打开文件夹")?;
     let root_string = to_string(&root);
     let connection = state.db.lock();
@@ -1679,7 +1710,7 @@ fn delete_text_highlight(
         .ok_or("高亮不存在或不属于当前目录")?;
     connection
         .execute(
-            "DELETE FROM text_highlights WHERE id=?1 AND root=?2",
+            "UPDATE text_highlights SET deleted_ms=strftime('%s','now')*1000 WHERE id=?1 AND root=?2",
             params![id, root_string],
         )
         .map_err(|e| e.to_string())?;
@@ -1688,7 +1719,7 @@ fn delete_text_highlight(
         "highlights-updated",
         HighlightsChanged {
             path,
-            source: window.label().to_owned(),
+            source: state.label.clone(),
         },
     )
     .ok();
@@ -1696,17 +1727,13 @@ fn delete_text_highlight(
 }
 
 #[tauri::command]
-fn clear_root_highlights(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    state: State<AppState>,
-) -> Result<usize, String> {
+fn clear_root_highlights(app: AppHandle, state: WindowState) -> Result<usize, String> {
     let root = state.current_root.lock().clone().ok_or("尚未打开文件夹")?;
     let removed = state
         .db
         .lock()
         .execute(
-            "DELETE FROM text_highlights WHERE root=?1",
+            "UPDATE text_highlights SET deleted_ms=strftime('%s','now')*1000 WHERE root=?1 AND deleted_ms IS NULL",
             params![to_string(&root)],
         )
         .map_err(|e| e.to_string())?;
@@ -1714,7 +1741,7 @@ fn clear_root_highlights(
         "highlights-updated",
         HighlightsChanged {
             path: "*".into(),
-            source: window.label().to_owned(),
+            source: state.label.clone(),
         },
     )
     .ok();
@@ -1722,7 +1749,7 @@ fn clear_root_highlights(
 }
 
 #[tauri::command]
-fn load_preferences(state: State<AppState>) -> Result<Option<ReaderPreferences>, String> {
+fn load_preferences(state: WindowState) -> Result<Option<ReaderPreferences>, String> {
     if !state.preferences_path.exists() {
         return Ok(None);
     }
@@ -1730,37 +1757,36 @@ fn load_preferences(state: State<AppState>) -> Result<Option<ReaderPreferences>,
     let backup = state.preferences_path.with_extension("legacy.json");
     let raw = serde_json::from_str::<serde_json::Value>(&content).ok();
     let valid_v2 = raw.as_ref().is_some_and(|value| {
-        value.get("schemaVersion").and_then(|item| item.as_u64()) == Some(2)
-            && matches!(
-                value.get("styleMode").and_then(|item| item.as_str()),
-                Some("canonical" | "legacy")
+        matches!(
+            value.get("schemaVersion").and_then(|item| item.as_u64()),
+            Some(2 | 3)
+        ) && matches!(
+            value.get("styleMode").and_then(|item| item.as_str()),
+            Some("canonical" | "legacy")
+        ) && matches!(
+            value
+                .get("typographyProfile")
+                .and_then(|item| item.as_str()),
+            Some("reading" | "study")
+        ) && matches!(
+            value.get("appearance").and_then(|item| item.as_str()),
+            Some("warm" | "white" | "night" | "nord" | "humanist" | "eink")
+        ) && matches!(
+            value.get("theme").and_then(|item| item.as_str()),
+            Some(
+                "paper"
+                    | "humanist"
+                    | "chinese"
+                    | "editorial"
+                    | "swiss"
+                    | "modern-textbook"
+                    | "solarized"
+                    | "night"
+                    | "nord"
+                    | "eink"
+                    | "technical"
             )
-            && matches!(
-                value
-                    .get("typographyProfile")
-                    .and_then(|item| item.as_str()),
-                Some("reading" | "study")
-            )
-            && matches!(
-                value.get("appearance").and_then(|item| item.as_str()),
-                Some("warm" | "white" | "night" | "nord")
-            )
-            && matches!(
-                value.get("theme").and_then(|item| item.as_str()),
-                Some(
-                    "paper"
-                        | "humanist"
-                        | "chinese"
-                        | "editorial"
-                        | "swiss"
-                        | "modern-textbook"
-                        | "solarized"
-                        | "night"
-                        | "nord"
-                        | "eink"
-                        | "technical"
-                )
-            )
+        )
     });
     if !valid_v2 && !backup.exists() {
         fs::copy(&state.preferences_path, &backup).map_err(|e| e.to_string())?;
@@ -1771,10 +1797,10 @@ fn load_preferences(state: State<AppState>) -> Result<Option<ReaderPreferences>,
 #[tauri::command]
 fn save_preferences(
     app: AppHandle,
-    window: tauri::WebviewWindow,
-    state: State<AppState>,
+    state: WindowState,
     preferences: ReaderPreferences,
 ) -> Result<(), String> {
+    let _guard = state.preferences_lock.lock();
     let temporary = state.preferences_path.with_extension("json.tmp");
     fs::write(
         &temporary,
@@ -1785,7 +1811,7 @@ fn save_preferences(
     app.emit(
         "preferences-updated",
         PreferencesChanged {
-            source: window.label().to_owned(),
+            source: state.label.clone(),
             preferences,
         },
     )
@@ -1794,7 +1820,7 @@ fn save_preferences(
 }
 
 #[tauri::command]
-fn list_recent_roots(state: State<AppState>, limit: u32) -> Result<Vec<RecentRoot>, String> {
+fn list_recent_roots(state: WindowState, limit: u32) -> Result<Vec<RecentRoot>, String> {
     let connection = state.db.lock();
     let mut statement = connection
         .prepare("SELECT path,opened_ms FROM recent_roots ORDER BY opened_ms DESC LIMIT ?1")
@@ -1811,7 +1837,7 @@ fn list_recent_roots(state: State<AppState>, limit: u32) -> Result<Vec<RecentRoo
 }
 
 #[tauri::command]
-fn get_index_diagnostics(state: State<AppState>) -> Result<IndexDiagnostics, String> {
+fn get_index_diagnostics(state: WindowState) -> Result<IndexDiagnostics, String> {
     let current_root = state.current_root.lock().clone();
     let connection = state.db.lock();
     let schema_version = connection
@@ -1828,7 +1854,7 @@ fn get_index_diagnostics(state: State<AppState>) -> Result<IndexDiagnostics, Str
     let highlight_count = if let Some(root) = &current_root {
         connection
             .query_row(
-                "SELECT count(*) FROM text_highlights WHERE root=?1",
+                "SELECT count(*) FROM text_highlights WHERE root=?1 AND deleted_ms IS NULL",
                 params![to_string(root)],
                 |row| row.get(0),
             )
@@ -2119,7 +2145,7 @@ fn shell_open(path: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_external(state: State<AppState>, path: String, editor: String) -> Result<(), String> {
+fn open_external(state: WindowState, path: String, editor: String) -> Result<(), String> {
     let path = guarded_path(&state, &path)?;
     if editor == "vscode" {
         #[cfg(target_os = "macos")]
@@ -2159,13 +2185,21 @@ async fn print_document(window: tauri::WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn consume_startup_target(state: State<AppState>) -> Option<String> {
+fn consume_startup_target(state: WindowState) -> Option<String> {
     let mut startup = state.startup_target.lock();
+    if startup.frontend_ready {
+        return None;
+    }
     startup.frontend_ready = true;
-    if let Some(target) = startup.path.take() {
+    // Reserve a pending launch until open_target completes so a second launch
+    // cannot replace the first document during frontend initialization.
+    if let Some(target) = startup.path.clone() {
         return Some(target);
     }
     drop(startup);
+    if state.label != "main" {
+        return None;
+    }
     state
         .db
         .lock()
@@ -2186,24 +2220,9 @@ fn first_path_argument(args: &[String]) -> Option<String> {
         .cloned()
 }
 
+#[cfg(test)]
 fn requests_new_window(args: &[String]) -> bool {
     args.iter().skip(1).any(|arg| arg == "--new-window")
-}
-
-// Finder can deliver an open event before the webview has registered its listener.
-fn dispatch_open_target(app: &AppHandle, path: String) {
-    let state = app.state::<AppState>();
-    let mut startup = state.startup_target.lock();
-    if startup.frontend_ready {
-        app.emit_to("main", "open-target-argument", path).ok();
-    } else {
-        startup.path = Some(path);
-    }
-    if let Some(window) = app.get_webview_window("main") {
-        window.unminimize().ok();
-        window.show().ok();
-        window.set_focus().ok();
-    }
 }
 
 #[cfg(target_os = "windows")]
@@ -2263,30 +2282,23 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(path) = first_path_argument(&args) {
-                if requests_new_window(&args) {
-                    let state = app.state::<AppState>();
-                    if open_in_new_window_impl(app, &state, &path).is_err() {
-                        dispatch_open_target(app, path);
+                open_external_target(app, path);
+            } else {
+                let app = app.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(error) = create_reader_window(&app, None) {
+                        eprintln!("无法新建阅读窗口：{error}");
                     }
-                } else {
-                    dispatch_open_target(app, path);
-                }
-            }
-            if let Some(window) = app.get_webview_window("main") {
-                window.show().ok();
-                window.set_focus().ok();
+                });
             }
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|_window, _event| {
-            #[cfg(target_os = "macos")]
-            if _window.label() == "main" {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
-                    // Keep the main webview/state for Dock reopen and Finder open events.
-                    api.prevent_close();
-                    _window.hide().ok();
-                }
+            if matches!(_event, tauri::WindowEvent::Destroyed) {
+                _window
+                    .state::<WindowRegistry>()
+                    .remove_window(_window.label());
             }
         })
         .setup(|app| {
@@ -2299,27 +2311,21 @@ pub fn run() {
             let db_path = data_dir.join("jingreader.sqlite3");
             let db = init_db(&db_path).map_err(std::io::Error::other)?;
             let startup_target = first_path_argument(&std::env::args().collect::<Vec<_>>());
-            app.manage(AppState {
-                current_root: Mutex::new(None),
-                db: Mutex::new(db),
-                watcher: Mutex::new(None),
-                preferences_path: data_dir.join("settings.json"),
-                db_path,
-                startup_target: Mutex::new(StartupTarget {
-                    path: startup_target,
-                    frontend_ready: false,
-                }),
-                window_targets: Mutex::new(HashMap::new()),
-                index_generation: AtomicU64::new(0),
-                search_generation: AtomicU64::new(0),
-                index_status: Mutex::new(IndexStatus::default()),
-            });
+            let registry = WindowRegistry {
+                sessions: Mutex::new(HashMap::new()),
+                db: Arc::new(Mutex::new(db)),
+                preferences_lock: Arc::new(Mutex::new(())),
+                data_dir,
+                closed: Mutex::new(HashSet::new()),
+            };
+            registry.create("main", startup_target);
+            app.manage(registry);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             open_target,
             open_in_new_window,
-            consume_window_target,
+            close_tab,
             list_directory,
             read_document,
             read_asset,
@@ -2339,6 +2345,14 @@ pub fn run() {
             update_text_highlight_color,
             delete_text_highlight,
             clear_root_highlights,
+            annotations::annotation_library,
+            annotations::managed_highlights,
+            annotations::recover_highlights,
+            annotations::relink_highlights,
+            annotations::restore_highlight,
+            annotations::manage_annotation_document,
+            annotations::export_annotations,
+            annotations::import_annotations,
             load_preferences,
             save_preferences,
             list_recent_roots,
@@ -2353,17 +2367,28 @@ pub fn run() {
         .run(|_app, _event| {
             #[cfg(target_os = "macos")]
             match _event {
+                tauri::RunEvent::ExitRequested {
+                    code: None, api, ..
+                } => {
+                    // Closing the final document keeps the Mac app/menu available; Cmd+Q exits.
+                    api.prevent_exit();
+                }
                 tauri::RunEvent::Opened { urls } => {
-                    // The reader has a single-root model; open the first local document.
-                    if let Some(path) = urls.iter().find_map(|url| url.to_file_path().ok()) {
-                        dispatch_open_target(_app, to_string(&path));
+                    // Finder may open several documents; each gets an independent window.
+                    for path in urls.iter().filter_map(|url| url.to_file_path().ok()) {
+                        open_external_target(_app, to_string(&path));
                     }
                 }
                 tauri::RunEvent::Reopen { .. } => {
-                    if let Some(window) = _app.get_webview_window("main") {
+                    if let Some(window) = _app.webview_windows().into_values().next() {
                         window.unminimize().ok();
                         window.show().ok();
                         window.set_focus().ok();
+                    } else {
+                        let app = _app.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            create_reader_window(&app, None).ok();
+                        });
                     }
                 }
                 _ => {}

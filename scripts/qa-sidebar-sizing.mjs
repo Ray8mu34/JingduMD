@@ -1,0 +1,70 @@
+import assert from "node:assert/strict";
+import { createServer } from "vite";
+import { launchQaBrowser } from "./qa-browser.mjs";
+
+const server = await createServer({ server: { host: "127.0.0.1", port: 5189 } });
+await server.listen();
+const browser = await launchQaBrowser();
+try {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  page.setDefaultTimeout(30000);
+  await page.route("**/fixtures/plain-article.md", (route) => route.fulfill({ body: "# 拖动侧栏阅读测试\n\n" + Array.from({ length: 40 }, (_, i) => `## 第 ${i + 1} 节\n\n${"这是一段用于检查宽度变化后阅读位置的长文章。".repeat(20)}\n\n`).join("") }));
+  await page.goto(`${server.resolvedUrls.local[0]}qa-app.html?sample=plain-article.md`, { waitUntil: "domcontentloaded" });
+  await page.locator(".markdown-body h1").waitFor();
+  for (const name of ["文件列表", "大纲"]) {
+    const button = page.getByRole("button", { name, exact: true });
+    if (await button.getAttribute("aria-expanded") !== "true") await button.click();
+  }
+  const left = page.getByRole("separator", { name: "文件栏宽度" });
+  const right = page.getByRole("separator", { name: "大纲栏宽度" });
+  const drag = async (handle, delta) => {
+    const box = await handle.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + 150);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + delta, box.y + 150, { steps: 12 });
+    await page.mouse.up();
+  };
+  const anchor = page.locator(".markdown-body h2").nth(10);
+  await anchor.evaluate((element) => element.scrollIntoView({ block: "start" }));
+  const beforeTop = (await anchor.boundingBox()).y;
+  const beforeWidth = (await page.locator(".markdown-body").boundingBox()).width;
+  await drag(left, -90);
+  assert.equal(await left.getAttribute("aria-valuenow"), "180");
+  assert.ok((await page.locator(".markdown-body").boundingBox()).width > beforeWidth, "narrower sidebar did not free article space");
+  const afterTop = (await anchor.boundingBox()).y;
+  assert.ok(Math.abs(afterTop - beforeTop) < 45, `reading anchor jumped during resize: ${beforeTop} -> ${afterTop}`);
+  await drag(right, -70);
+  assert.equal(await right.getAttribute("aria-valuenow"), "300");
+  assert.equal(await page.locator("html").evaluate((element) => element.classList.contains("resizing-sidebar")), false);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await left.waitFor();
+  assert.equal(await left.getAttribute("aria-valuenow"), "180");
+  assert.equal(await right.getAttribute("aria-valuenow"), "300");
+  await left.focus();
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await left.getAttribute("aria-valuenow"), "190");
+  await right.dblclick();
+  assert.equal(await right.getAttribute("aria-valuenow"), "230");
+  await left.focus();
+  await page.keyboard.press("End");
+  await right.focus();
+  await page.keyboard.press("End");
+  assert.ok((await page.locator(".reader-pane").boundingBox()).width >= 480);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("jingreader:sidebar-widths:v1")));
+  await page.setViewportSize({ width: 1080, height: 900 });
+  await page.waitForFunction(() => document.querySelector(".reader-pane").getBoundingClientRect().width >= 480);
+  assert.ok((await page.locator(".reader-pane").boundingBox()).width >= 480);
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.waitForFunction((width) => document.querySelector('[aria-label="文件栏宽度"]').getAttribute("aria-valuenow") === String(width), saved.treeWidth);
+  assert.equal(await right.getAttribute("aria-valuenow"), String(saved.outlineWidth));
+  await page.setViewportSize({ width: 760, height: 900 });
+  await page.waitForFunction(() => !document.querySelector(".left-sidebar"));
+  await page.getByRole("button", { name: "文件列表", exact: true }).click();
+  await drag(left, -70);
+  assert.equal(await left.getAttribute("aria-valuenow"), String(saved.treeWidth - 70));
+  assert.ok((await page.locator(".reader-pane").boundingBox()).width >= 759, "overlay resized the reading pane");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator(".left-sidebar").count(), 0);
+  await page.close();
+  console.log("Sidebar dragging, keyboard/reset, persistence, reading anchor and responsive layout passed.");
+} finally { await browser.close(); await server.close(); }

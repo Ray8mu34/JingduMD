@@ -146,17 +146,21 @@ const canonicalProfiles: Record<TypographyProfileId, TypographyOverride> = {
   reading: { lineHeight: 1.85, contentWidth: 760, paragraphSpacing: .88, headingDensity: "balanced", headingScale: .95, fontFamily: "serif", quoteStyle: "bar", tableStyle: "plain", imageStyle: "plain", paragraphStyle: "spacing", firstLineIndent: 2, textAlign: "left", letterSpacing: 0, codeWrap: false, codeScale: .84, formulaScale: 1, chineseFont: "", latinFont: "", chineseHeadingFont: "", latinHeadingFont: "", headingFont: "", codeFont: "" },
   study: { lineHeight: 1.78, contentWidth: 760, paragraphSpacing: .66, headingDensity: "compact", headingScale: .91, fontFamily: "serif", quoteStyle: "bar", tableStyle: "plain", imageStyle: "plain", paragraphStyle: "spacing", firstLineIndent: 2, textAlign: "left", letterSpacing: 0, codeWrap: false, codeScale: .84, formulaScale: 1, chineseFont: "", latinFont: "", chineseHeadingFont: "", latinHeadingFont: "", headingFont: "", codeFont: "" }
 };
-const appearanceThemes: Record<AppearanceId, ReaderThemeId> = { warm: "paper", white: "paper", night: "night", nord: "nord" };
+// Humanist and ink contribute palette tokens only, with no legacy theme selectors.
+const appearanceThemes: Record<AppearanceId, ReaderThemeId> = { warm: "paper", white: "paper", night: "night", nord: "nord", humanist: "paper", eink: "paper" };
+export const APPEARANCE_IDS = Object.keys(appearanceThemes) as AppearanceId[];
 
 export function resolveReadingStyle(value: ReaderPreferences): ReaderPreferences {
-  if (value.styleMode === "legacy") return value;
+  if (value.styleMode === "legacy") value = migratePreferences(value);
   return {
     ...value,
     ...canonicalProfiles[value.typographyProfile],
     ...(value.typographyOverrides?.[value.typographyProfile] ?? {}),
     theme: appearanceThemes[value.appearance],
     fontSize: value.fontSize,
-    imageBrightness: value.imageBrightness
+    imageBrightness: value.imageBrightness,
+    backgroundWarmth: 0,
+    textContrast: 0
   };
 }
 
@@ -165,7 +169,7 @@ export function chooseTypographyProfile(value: ReaderPreferences, profile: Typog
 }
 
 export function chooseAppearance(value: ReaderPreferences, appearance: AppearanceId): ReaderPreferences {
-  return value.styleMode === "legacy" ? { ...value, appearance, legacyAppearance: appearance } : { ...value, appearance };
+  return { ...migratePreferences(value), appearance };
 }
 
 export function setTypographyOverride<K extends keyof TypographyOverride>(value: ReaderPreferences, key: K, next: TypographyOverride[K]): ReaderPreferences {
@@ -200,12 +204,16 @@ export function migratePreferences(saved: Partial<ReaderPreferences> | null | un
   if (!saved) return DEFAULT_PREFERENCES;
   const knownTheme = READER_PRESETS.some((preset) => preset.id === saved.theme) ? saved.theme : "paper";
   const old = !saved.schemaVersion;
+  const legacy = saved.styleMode === "legacy" || old;
+  const themeAppearance: Partial<Record<ReaderThemeId, AppearanceId>> = { paper: "warm", humanist: "humanist", eink: "eink", night: "night", nord: "nord" };
+  const appearance = legacy ? saved.legacyAppearance ?? themeAppearance[knownTheme!] ?? "warm" : saved.appearance;
   const merged = { ...DEFAULT_PREFERENCES, ...saved, theme: knownTheme,
-    schemaVersion: 2,
-    styleMode: old || (saved.schemaVersion ?? 0) > 2 ? "legacy" : saved.styleMode === "canonical" ? "canonical" : "legacy",
+    schemaVersion: 3,
+    styleMode: "canonical",
     typographyProfile: saved.typographyProfile === "study" ? "study" : "reading",
-    appearance: (["warm", "white", "night", "nord"] as const).includes(saved.appearance as AppearanceId) ? saved.appearance : "warm",
-    legacyAppearance: (["warm", "white", "night", "nord"] as const).includes(saved.legacyAppearance as AppearanceId) ? saved.legacyAppearance! : null,
+    appearance: APPEARANCE_IDS.includes(appearance as AppearanceId) ? appearance : "warm",
+    legacyAppearance: null,
+    imageBrightness: legacy ? 100 : saved.imageBrightness ?? DEFAULT_PREFERENCES.imageBrightness,
     showTree: saved.showTree ?? (old ? true : DEFAULT_PREFERENCES.showTree),
     showOutline: saved.showOutline ?? (old ? true : DEFAULT_PREFERENCES.showOutline),
     typographyOverrides: {

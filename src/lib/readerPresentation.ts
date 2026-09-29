@@ -2,26 +2,27 @@ import type { CSSProperties } from "react";
 import type { ReaderPreferences, SystemFont } from "../types";
 import { readerFontCss } from "./fonts";
 import { resolveReaderStyle } from "../reader/styleContract";
+import { migratePreferences } from "./readerPreferences";
 
 export function readerPresentation(preferences: ReaderPreferences, fonts: SystemFont[] = []) {
+  if (preferences.styleMode === "legacy") preferences = migratePreferences(preferences);
   const { typography, appearance, readingFocus } = resolveReaderStyle(preferences);
-  const legacy = preferences.styleMode === "legacy";
   const profileOverrides = preferences.typographyOverrides?.[preferences.typographyProfile] ?? {};
   const inheritedHeading = {
-    cjk: !!typography.headingFont && (legacy ? !typography.chineseHeadingFont : profileOverrides.chineseHeadingFont === undefined),
-    latin: !!typography.headingFont && (legacy ? !typography.latinHeadingFont : profileOverrides.latinHeadingFont === undefined),
-    full: !!typography.headingFont && (legacy ? !typography.chineseHeadingFont && !typography.latinHeadingFont : profileOverrides.chineseHeadingFont === undefined && profileOverrides.latinHeadingFont === undefined)
+    cjk: !!typography.headingFont && profileOverrides.chineseHeadingFont === undefined,
+    latin: !!typography.headingFont && profileOverrides.latinHeadingFont === undefined,
+    full: !!typography.headingFont && profileOverrides.chineseHeadingFont === undefined && profileOverrides.latinHeadingFont === undefined
   };
   const serif = typography.fontFamily === "serif";
   const bodyFallback = serif
-    ? legacy ? '"Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif' : '"Source Serif 4", "Source Serif", Charter, Literata, "Noto Serif", Georgia, "Noto Serif SC", "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif'
-    : legacy ? '"Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif' : '"Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif';
+    ? '"Source Serif 4", "Source Serif", Charter, Literata, "Noto Serif", Georgia, "Noto Serif SC", "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif'
+    : '"Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif';
   const headingFallback = serif
-    ? legacy ? 'Georgia, "Noto Serif CJK SC", "Songti SC", serif'
-      : preferences.typographyProfile === "study" ? '"Segoe UI", "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif'
+    ? preferences.typographyProfile === "study" ? '"Segoe UI", "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif'
         : '"Source Serif 4", "Source Serif", "Noto Serif", Cambria, "Noto Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif'
-    : legacy ? 'Inter, "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif' : 'Inter, "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif';
+    : 'Inter, "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif';
   const style = {
+    "--formula-align": preferences.formulaAlign === "left" ? "left" : "center",
     "--reader-size": `${typography.fontSize}px`, "--reader-leading": typography.lineHeight,
     "--reader-width": `${typography.contentWidth}px`, "--paragraph-space": `${typography.paragraphSpacing}em`,
     "--reader-font": [typography.chineseFont && '"JingReader CJK"', typography.latinFont && '"JingReader Latin"', bodyFallback].filter(Boolean).join(", "),
@@ -36,7 +37,7 @@ export function readerPresentation(preferences: ReaderPreferences, fonts: System
   } as CSSProperties;
   const classes = [
     `theme-${appearance.theme}`, `font-${typography.fontFamily}`,
-    legacy ? "style-legacy" : `style-canonical profile-${preferences.typographyProfile}`,
+    `style-canonical profile-${preferences.typographyProfile}`,
     appearance.id ? `appearance-${appearance.id}` : "",
     `paragraph-${typography.paragraphStyle}`, `quote-${typography.quoteStyle}`,
     `table-${typography.tableStyle}`, `image-${typography.imageStyle}`,

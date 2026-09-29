@@ -1,6 +1,7 @@
 import { isMac, primaryModifier, shortcutLabel } from "./lib/platform";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { isTauri } from "@tauri-apps/api/core";
+import { useTabInvoke } from "./lib/tabContext";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -11,12 +12,17 @@ import {
   Trash2, X, MoreHorizontal, FileText, Database, Type
 } from "lucide-react";
 import FileTree from "./components/FileTree";
+import ResizableSidebar from "./components/ResizableSidebar";
+import { fitSidebars, READER_MIN, SIDEBAR_MAX, SIDEBAR_MIN } from "./lib/sidebarSizing";
+import { useSidebarWidths } from "./lib/useSidebarWidths";
 import MarkdownReader from "./components/MarkdownReader";
 import SearchPanel from "./components/SearchPanel";
 import SettingsPanel from "./components/SettingsPanel";
+import AnnotationManager, { type RecoveryReport } from "./components/AnnotationManager";
+import HighlightToolbar from "./components/HighlightToolbar";
 import { clearFindHighlights, findTextRanges, scrollToRange, updateFindHighlights } from "./lib/find";
 import {
-  clearTextHighlights, HIGHLIGHT_COLORS, paintHighlights, resolveHighlights,
+  clearTextHighlights, HIGHLIGHT_COLORS, HIGHLIGHT_COLOR_LABELS, highlightAtPoint, paintHighlights, resolveHighlights,
   scrollToHighlight, selectionToHighlight
 } from "./lib/highlights";
 import { readerPresentation } from "./lib/readerPresentation";
@@ -60,14 +66,20 @@ function applyReadingPosition(container: HTMLElement, saved: ReadingPosition): b
 }
 type PreferencesChanged = { source: string; preferences: ReaderPreferences };
 type HighlightsChanged = { path: string; source: string };
-type HighlightPopover = { x: number; y: number; draft: NewTextHighlight };
+type HighlightPopover = { x: number; y: number } & ({ draft: NewTextHighlight; highlight?: never } | { highlight: TextHighlight; draft?: never });
 
-export default function App() {
+export type ReaderSession = { root: string; path?: string; back: string[]; forward: string[] };
+type AppProps = { session?: ReaderSession; initialPath?: string; onSessionChange?: (session: ReaderSession) => void; onNewTab?: (path?: string, root?: string) => void; tabBar?: ReactNode; tabId?: string };
+
+export default function App({ session, initialPath, onSessionChange, onNewTab, tabBar, tabId = "primary" }: AppProps = {}) {
+  const invoke = useTabInvoke();
+  const sessionReporter = useRef(onSessionChange);
+  sessionReporter.current = onSessionChange;
   const windowLabel = isTauri() ? getCurrentWindow().label : "main";
-  const isMainWindow = windowLabel === "main";
-  const windowStateKey = `jingreader:window:${windowLabel}`;
+  const scopeLabel = tabId === "primary" ? windowLabel : `${windowLabel}/${tabId}`;
+  const windowStateKey = `jingreader:window:${scopeLabel}`;
   const savedWindowState = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem(windowStateKey) ?? "null") as { showTree?: boolean; showOutline?: boolean } | null; }
+    try { return JSON.parse(localStorage.getItem(windowStateKey) ?? "null") as { showTree?: boolean; showOutline?: boolean; treeWidth?: number; outlineWidth?: number } | null; }
     catch { return null; }
   }, [windowStateKey]);
   const [root, setRoot] = useState("");
@@ -76,6 +88,8 @@ export default function App() {
   const [fontCatalog, setFontCatalog] = useState<SystemFont[]>([]);
   const [showTree, setShowTree] = useState(savedWindowState?.showTree ?? DEFAULT_PREFERENCES.showTree);
   const [showOutline, setShowOutline] = useState(savedWindowState?.showOutline ?? DEFAULT_PREFERENCES.showOutline);
+  const { treeWidth, outlineWidth, setTreeWidth, setOutlineWidth } = useSidebarWidths();
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   // 270px file tree + 230px outline + at least 580px for the reading pane.
   const [narrow, setNarrow] = useState(() => window.innerWidth < 1080);
   const [narrowTreeOpen, setNarrowTreeOpen] = useState(false);
@@ -112,6 +126,8 @@ export default function App() {
   const [recentHighlights, setRecentHighlights] = useState<TextHighlight[]>([]);
   const [rightTab, setRightTab] = useState<"outline" | "highlights">("outline");
   const [highlightPopover, setHighlightPopover] = useState<HighlightPopover | null>(null);
+  const [annotationManagerOpen, setAnnotationManagerOpen] = useState(false);
+  const [deletedHighlight, setDeletedHighlight] = useState<{ id: number; path: string } | null>(null);
   const selectionDraft = useRef<HighlightPopover | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const settingsTrigger = useRef<HTMLButtonElement>(null);
@@ -125,6 +141,7 @@ export default function App() {
   const moreMenu = useRef<HTMLDivElement>(null);
   const settingsLayer = useRef<HTMLDivElement>(null);
   const topbarRef = useRef<HTMLElement>(null);
+  const tabbarRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLElement>(null);
   const saveTimer = useRef<number>();
   const telemetryFrame = useRef<number>();
@@ -134,8 +151,8 @@ export default function App() {
   const previewingPreferences = useRef(false);
   const documentRef = useRef<DocumentPayload | null>(null);
   const rootRef = useRef("");
-  const backHistory = useRef<string[]>([]);
-  const forwardHistory = useRef<string[]>([]);
+  const backHistory = useRef<string[]>(session?.back ?? []);
+  const forwardHistory = useRef<string[]>(session?.forward ?? []);
   const pendingHighlightId = useRef<number | null>(null);
   const pendingSearch = useRef("");
   const searchCaller = useRef<HTMLElement | null>(null);
@@ -190,7 +207,7 @@ export default function App() {
     requestAnimationFrame(() => searchCaller.current?.isConnected && searchCaller.current.focus());
   }, []);
   useEffect(() => {
-    const update = () => { const next = window.innerWidth < 1080; if (next !== narrow) { preserveAnchor(); setNarrow(next); setNarrowTreeOpen(false); setNarrowOutlineOpen(false); } };
+    const update = () => { preserveAnchor(); setViewportWidth(window.innerWidth); const next = window.innerWidth < 1080; if (next !== narrow) { setNarrow(next); setNarrowTreeOpen(false); setNarrowOutlineOpen(false); } };
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, [narrow, preserveAnchor]);
@@ -244,16 +261,23 @@ export default function App() {
 
   const createHighlight = useCallback(async (draft: NewTextHighlight, color: HighlightColor) => {
     try {
-      await invoke<TextHighlight>("create_text_highlight", { highlight: { ...draft, color } });
+      const selection = globalThis.getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      const existing = range && resolvedHighlights.find((item) => item.range?.toString() === draft.quote &&
+        item.range.compareBoundaryPoints(Range.START_TO_START, range) === 0);
+      if (existing) await invoke("update_text_highlight_color", { id: existing.id, color });
+      else await invoke<TextHighlight>("create_text_highlight", { highlight: { ...draft, color } });
       globalThis.getSelection()?.removeAllRanges();
+      selectionDraft.current = null;
       setHighlightPopover(null);
       await refreshHighlights(draft.path);
     } catch (error) { notify(`无法保存高亮：${errorText(error)}`); }
-  }, [notify, refreshHighlights]);
+  }, [notify, refreshHighlights, resolvedHighlights]);
 
   const changeHighlightColor = useCallback(async (id: number, color: HighlightColor, path: string) => {
     try {
       await invoke("update_text_highlight_color", { id, color });
+      setHighlightPopover(null);
       await refreshHighlights(documentRef.current?.path ?? path);
     } catch (error) { notify(`无法修改高亮：${errorText(error)}`); }
   }, [notify, refreshHighlights]);
@@ -261,9 +285,34 @@ export default function App() {
   const deleteHighlight = useCallback(async (id: number, path: string) => {
     try {
       await invoke("delete_text_highlight", { id });
+      setHighlightPopover(null);
+      setDeletedHighlight({ id, path });
       await refreshHighlights(documentRef.current?.path ?? path);
     } catch (error) { notify(`无法删除高亮：${errorText(error)}`); }
   }, [notify, refreshHighlights]);
+
+  const undoHighlightDelete = async () => {
+    if (!deletedHighlight) return;
+    try {
+      await invoke("restore_highlight", { id: deletedHighlight.id });
+      setDeletedHighlight(null);
+      await refreshHighlights(documentRef.current?.path);
+    } catch (error) { notify(`无法恢复高亮：${errorText(error)}`); }
+  };
+
+  useEffect(() => {
+    if (!isTauri() || !root) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void invoke<RecoveryReport>("recover_highlights").then((report) => {
+        if (!cancelled && report.recovered) {
+          notify(`已找回 ${report.recovered} 篇文档的高亮`);
+          void refreshHighlights(documentRef.current?.path);
+        }
+      }).catch((error) => { if (!cancelled && !String(error).includes("正在找回")) notify(`高亮找回未完成：${errorText(error)}`); });
+    }, 1200);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [root, treeVersion, notify, refreshHighlights]);
 
   const exportPdf = useCallback(async () => {
     if (!documentRef.current) return;
@@ -340,6 +389,7 @@ export default function App() {
     const article = container?.querySelector<HTMLElement>(".markdown-body");
     if (!container || !article || !doc || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
+      if (container.dataset.imageResizing) return;
       const initial = positionState.current;
       if (initial?.path === doc.path && initial.ready && initial.restoreTarget && initial.userGeneration === userScrollGeneration.current) {
         applyReadingPosition(container, initial.restoreTarget);
@@ -353,7 +403,20 @@ export default function App() {
       }
     });
     observer.observe(article);
-    return () => observer.disconnect();
+    const beginResize = () => {
+      userScrollGeneration.current++;
+      pendingAnchor.current = null;
+      liveAnchor.current = null;
+      if (positionState.current) positionState.current.restoreTarget = null;
+    };
+    const endResize = () => {
+      const anchor = captureTextAnchor(container);
+      liveAnchor.current = anchor ? { path: doc.path, generation: userScrollGeneration.current, anchor } : null;
+      scheduleReadingTelemetry();
+    };
+    container.addEventListener("jingreader:image-resize-start", beginResize);
+    container.addEventListener("jingreader:image-resize-end", endResize);
+    return () => { observer.disconnect(); container.removeEventListener("jingreader:image-resize-start", beginResize); container.removeEventListener("jingreader:image-resize-end", endResize); };
   }, [doc]);
 
   const navigateHeading = useCallback((id: string) => {
@@ -379,7 +442,7 @@ export default function App() {
     const documentRatio = container.scrollTop / Math.max(1, container.scrollHeight - container.clientHeight);
     const position = { path, headingId: active?.id ?? null, headingRatio, documentRatio };
     windowPositions.current.set(path, position);
-    void invoke("save_reading_position", { position });
+    return invoke("save_reading_position", { position }).catch(() => undefined);
   }, []);
 
   const restorePosition = useCallback(async (path: string, generation: number, hash?: string) => {
@@ -476,7 +539,7 @@ export default function App() {
       if (documentRef.current) persistPosition(documentRef.current.path);
       documentRef.current = null;
       positionState.current = null;
-      if (rootRef.current !== target.root) {
+      if (rootRef.current && rootRef.current !== target.root) {
         backHistory.current = [];
         forwardHistory.current = [];
         setHistoryVersion((value) => value + 1);
@@ -509,8 +572,27 @@ export default function App() {
 
   const chooseFile = useCallback(async () => {
     const selected = await open({ directory: false, multiple: false, title: "打开 Markdown 文件", filters: [{ name: "Markdown", extensions: ["md", "markdown"] }] });
-    if (typeof selected === "string") { if (narrow) setNarrowTreeOpen(false); await applyTarget(selected); }
-  }, [applyTarget, narrow]);
+    if (typeof selected === "string") { if (narrow) setNarrowTreeOpen(false); if (onNewTab && doc) onNewTab(selected); else await applyTarget(selected); }
+  }, [applyTarget, narrow, onNewTab, doc]);
+
+  useEffect(() => {
+    if (root && (doc || !(session?.path || initialPath))) sessionReporter.current?.({ root, path: doc?.path, back: [...backHistory.current], forward: [...forwardHistory.current] });
+  }, [root, doc?.path, historyVersion]);
+  useLayoutEffect(() => () => {
+    window.clearTimeout(saveTimer.current);
+    if (documentRef.current) persistPosition(documentRef.current.path);
+  }, [persistPosition]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    const appWindow = getCurrentWindow();
+    const listener = appWindow.onCloseRequested(async () => {
+      if (!active) return;
+      window.clearTimeout(saveTimer.current);
+      if (documentRef.current) await persistPosition(documentRef.current.path);
+    });
+    return () => { active = false; void listener.then((unlisten) => unlisten()); };
+  }, [persistPosition]);
 
   useEffect(() => { documentRef.current = doc; }, [doc]);
 
@@ -556,10 +638,7 @@ export default function App() {
       .then((saved) => { const migrated = migratePreferences(saved); setPreferences(migrated); if (!savedWindowState) { setShowTree(migrated.showTree); setShowOutline(migrated.showOutline); } })
       .finally(() => setPreferencesReady(true));
     refreshRecentRoots();
-    invoke<OpenTarget | null>("consume_window_target").then((target) => {
-      if (target) void applyResolvedTarget(target, false);
-    });
-  }, [applyResolvedTarget, applyTarget, isMainWindow, refreshRecentRoots, savedWindowState]);
+  }, [applyResolvedTarget, applyTarget, refreshRecentRoots, savedWindowState]);
 
   useEffect(() => {
     if (!preferencesReady) return;
@@ -582,23 +661,31 @@ export default function App() {
     const cleanups = [
       listen<string>("open-target-argument", ({ payload }) => void applyTarget(payload)).then(async (unlisten) => {
         if (!active) { unlisten(); return () => {}; }
-        if (isMainWindow && !startupConsumed.current) {
+        if (!startupConsumed.current) {
           startupConsumed.current = true;
-          const path = await invoke<string | null>("consume_startup_target");
-          if (path) void applyTarget(path);
+          try {
+            if (session?.root) {
+              const target = await invoke<OpenTarget>("open_target", { path: session.root });
+              if (active) void applyResolvedTarget({ ...target, selectedFile: session.path ?? null });
+            } else if (initialPath) void applyTarget(initialPath);
+            else {
+              const path = await invoke<string | null>("consume_startup_target");
+              if (active && path) void applyTarget(path);
+            }
+          } catch (error) { if (active) notify(`无法恢复标签页：${errorText(error)}`); }
         }
         return unlisten;
       }),
-      listen<IndexStatus>("index-status", ({ payload }) => { if (payload.root === rootRef.current) setIndexStatus(payload); }),
+      listen<IndexStatus & { scope?: string }>("index-status", ({ payload }) => { if (payload.root === rootRef.current && (!payload.scope || payload.scope === scopeLabel)) setIndexStatus(payload); }),
       listen<string>("tree-changed", ({ payload }) => { if (payload === rootRef.current) setTreeVersion((value) => value + 1); }),
       listen<PreferencesChanged>("preferences-updated", ({ payload }) => {
-        if (payload.source === windowLabel) return;
+        if (payload.source === scopeLabel) return;
         preserveAnchor();
         skipPreferenceSave.current = true;
         setPreferences((current) => ({ ...migratePreferences(payload.preferences), showTree: current.showTree, showOutline: current.showOutline }));
       }),
       listen<HighlightsChanged>("highlights-updated", ({ payload }) => {
-        if (payload.source === windowLabel && payload.path !== "*") return;
+        if (payload.source === scopeLabel && payload.path !== "*") return;
         if (payload.path === "*") void refreshHighlights(documentRef.current?.path);
         else if (documentRef.current?.path === payload.path) void refreshHighlights(payload.path);
         else if (rootRef.current) void refreshHighlights(documentRef.current?.path);
@@ -610,7 +697,7 @@ export default function App() {
       })
     ];
     return () => { active = false; cleanups.forEach((promise) => void promise.then((fn) => fn())); };
-  }, [applyTarget, isMainWindow, loadDocument, notify, preserveAnchor, refreshHighlights, windowLabel]);
+  }, [applyTarget, applyResolvedTarget, loadDocument, notify, preserveAnchor, refreshHighlights, scopeLabel]);
 
   useEffect(() => {
     if (!isTauri() || !preferencesReady) return;
@@ -634,7 +721,7 @@ export default function App() {
     switch (action) {
       case "reader-open-file": void chooseFile(); break;
       case "reader-open-folder": void chooseFolder(); break;
-      case "reader-new-window": if (doc) openDocumentInNewWindow(doc.path); break;
+      case "reader-open-in-new-window": if (doc) openDocumentInNewWindow(doc.path); break;
       case "reader-export-pdf": if (doc) setPrintOptionsOpen(true); break;
       case "reader-find": if (doc) setFindOpen(true); break;
       case "reader-search": if (root) openFolderSearch(); break;
@@ -647,6 +734,8 @@ export default function App() {
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      if (annotationManagerOpen) return;
+      if (isMac && event.metaKey && ["o", "p", "f", ",", "e", "d"].includes(event.key.toLowerCase())) return;
       if (event.altKey && event.key === "ArrowLeft") { event.preventDefault(); navigateHistory("back"); return; }
       if (event.altKey && event.key === "ArrowRight") { event.preventDefault(); navigateHistory("forward"); return; }
       if (primaryModifier(event) && !event.shiftKey && event.key.toLowerCase() === "o") { event.preventDefault(); void chooseFile(); }
@@ -677,7 +766,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [chooseFile, closeFolderSearch, closeSettings, doc, findOpen, highlightPopover, isMainWindow, moreOpen, narrow, narrowOutlineOpen, narrowTreeOpen, navigateHistory, openFolderSearch, openMenuOpen, printOptionsOpen, root, searchOpen, settingsOpen, toggleOutline, toggleTree]);
+  }, [annotationManagerOpen, chooseFile, closeFolderSearch, closeSettings, doc, findOpen, highlightPopover, moreOpen, narrow, narrowOutlineOpen, narrowTreeOpen, navigateHistory, openFolderSearch, openMenuOpen, printOptionsOpen, root, searchOpen, settingsOpen, toggleOutline, toggleTree]);
 
   useEffect(() => {
     clearFindHighlights();
@@ -715,7 +804,6 @@ export default function App() {
   }
 
   function captureHighlightSelection(show = false) {
-    if (show && selectionDraft.current) { setHighlightPopover(selectionDraft.current); return; }
     if (!doc) return;
     const article = scrollRef.current?.querySelector<HTMLElement>(".markdown-body");
     const selection = globalThis.getSelection();
@@ -730,6 +818,15 @@ export default function App() {
     };
     selectionDraft.current = popover;
     if (show) setHighlightPopover(popover);
+  }
+
+  function handleReaderMouseUp(event: React.MouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    if (!globalThis.getSelection()?.isCollapsed) { captureHighlightSelection(true); return; }
+    selectionDraft.current = null;
+    if ((event.target as HTMLElement).closest("button,a,input,textarea,summary")) return;
+    const highlight = highlightAtPoint(resolvedHighlights, event.clientX, event.clientY);
+    setHighlightPopover(highlight ? { highlight, x: Math.max(124, Math.min(window.innerWidth - 124, event.clientX)), y: Math.max(64, event.clientY - 12) } : null);
   }
 
   function navigateToStoredHighlight(highlight: TextHighlight) {
@@ -769,14 +866,21 @@ export default function App() {
   const presentation = readerPresentation(preferences, fontCatalog);
   const { style: readerStyle } = presentation;
   const sidebarsHidden = focusMode;
-  const modalOpen = searchOpen || printOptionsOpen;
+  const treeVisible = !sidebarsHidden && (narrow ? narrowTreeOpen : showTree) && !!root;
+  const outlineVisible = !sidebarsHidden && (narrow ? narrowOutlineOpen : showOutline) && !!doc;
+  const fitted = narrow ? { left: treeWidth, right: outlineWidth }
+    : fitSidebars(viewportWidth, treeVisible ? treeWidth : 0, outlineVisible ? outlineWidth : 0);
+  const treeMax = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX.left, narrow ? Math.floor(viewportWidth * .82) : viewportWidth - READER_MIN - fitted.right));
+  const outlineMax = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX.right, narrow ? Math.floor(viewportWidth * .82) : viewportWidth - READER_MIN - fitted.left));
+  const modalOpen = searchOpen || printOptionsOpen || annotationManagerOpen;
   useEffect(() => {
     if (topbarRef.current) topbarRef.current.inert = modalOpen;
     if (workspaceRef.current) workspaceRef.current.inert = modalOpen;
+    if (tabbarRef.current) tabbarRef.current.inert = modalOpen;
   }, [modalOpen]);
   void historyVersion;
 
-  const readingClasses = ["app", presentation.classes,
+  const readingClasses = ["app", tabBar ? "has-tabs" : "", presentation.classes,
     preferences.pdfStyle === "current" ? "print-current-theme" : "",
     preferences.pdfIncludeHighlights ? "print-with-highlights" : "print-without-highlights",
     focusMode ? "focus-mode" : ""].filter(Boolean).join(" ");
@@ -790,6 +894,8 @@ export default function App() {
       <div className="open-file-group"><button onClick={() => void chooseFile()} title={shortcutLabel("打开文件 (Ctrl+O)")}><FileText /><span>打开文件</span></button>
         <div className="toolbar-menu-wrap"><button ref={openMenuTrigger} className="open-file-options" aria-label="打开选项" aria-haspopup="menu" aria-controls="open-menu" aria-expanded={openMenuOpen} onClick={() => { if (settingsOpen) closeSettings("switch"); setOpenMenuOpen((open) => !open); setMoreOpen(false); }} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setOpenMenuOpen(true); setMoreOpen(false); } }}><ChevronDown /></button>
           {openMenuOpen && <div ref={openMenu} id="open-menu" className="toolbar-menu" role="menu" aria-label="打开选项" onKeyDown={(event) => handleMenuKeys(event, (reason) => { setOpenMenuOpen(false); if (reason === "escape") openMenuTrigger.current?.focus(); })}>
+            {onNewTab && <button role="menuitem" onClick={() => { setOpenMenuOpen(false); onNewTab(); }}><FileText />新建标签页</button>}
+            <button role="menuitem" onClick={() => { setOpenMenuOpen(false); void invoke("open_in_new_window", { path: null }).catch((error) => notify(String(error))); }}><AppWindow />新建窗口</button>
             <button role="menuitem" onClick={() => { setOpenMenuOpen(false); void chooseFolder(); }}><FolderOpen />打开文件夹</button>
           </div>}
         </div>
@@ -803,6 +909,7 @@ export default function App() {
       <div className="toolbar-menu-wrap"><button ref={moreTrigger} aria-label="更多" aria-haspopup="menu" aria-controls="more-menu" aria-expanded={moreOpen} onClick={() => { if (settingsOpen) closeSettings("switch"); setMoreOpen((open) => !open); setOpenMenuOpen(false); }} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setMoreOpen(true); setOpenMenuOpen(false); } }}><MoreHorizontal /></button>{moreOpen && <div ref={moreMenu} id="more-menu" className="toolbar-menu" role="menu" aria-label="更多操作" onKeyDown={(event) => handleMenuKeys(event, (reason) => { setMoreOpen(false); if (reason === "escape") moreTrigger.current?.focus(); })}>
         <button role="menuitem" disabled={!doc} onClick={() => { if (doc) openDocumentInNewWindow(doc.path); setMoreOpen(false); }}><AppWindow />在新窗口打开</button>
         <button role="menuitem" disabled={!doc} onClick={() => { setPrintOptionsOpen(true); setMoreOpen(false); }}><Printer />打印或导出 PDF</button>
+        <button role="menuitem" onClick={() => { setAnnotationManagerOpen(true); setMoreOpen(false); setHighlightPopover(null); }}><Highlighter />标注管理与备份</button>
         <button role="menuitem" onClick={() => { setFocusMode((value) => !value); setMoreOpen(false); }}><Focus />{focusMode ? "恢复两侧栏" : "隐藏两侧栏"}</button>
         <button role="menuitem" onClick={() => { setSettingsSection("system"); setSettingsOpen(true); setMoreOpen(false); }}><Database />应用设置</button>
         <button role="menuitem" onClick={() => { void getCurrentWindow().isFullscreen().then((yes) => getCurrentWindow().setFullscreen(!yes)); setMoreOpen(false); }}><Maximize2 />全屏</button>
@@ -814,9 +921,10 @@ export default function App() {
         <button className="window-control close" onClick={closeWindow} title="关闭窗口" aria-label="关闭窗口"><X /></button>
       </div>}
     </header>
+    {tabBar && <div ref={tabbarRef} className="tabbar-host">{tabBar}</div>}
 
-    <main ref={workspaceRef} className="workspace">
-      {!sidebarsHidden && (narrow ? narrowTreeOpen : showTree) && root && <aside ref={treeSidebar} className={`left-sidebar ${narrow ? "overlay-sidebar" : ""}`}><FileTree key={`${root}:${treeVersion}`} root={root} selected={doc?.path ?? null} onOpen={openDocument} onOpenNew={openDocumentInNewWindow} onSearch={openFolderSearch} onChooseFolder={() => void chooseFolder()} /></aside>}
+    <main ref={workspaceRef} className="workspace" id={tabBar ? "reader-tab-panel" : undefined} role={tabBar ? "tabpanel" : undefined} aria-labelledby={tabBar ? `tab-${tabId}` : undefined}>
+      {treeVisible && <ResizableSidebar ref={treeSidebar} side="left" width={Math.min(fitted.left, treeMax)} maxWidth={treeMax} overlay={narrow} onResize={(width) => { preserveAnchor(); setTreeWidth(width); }}><FileTree key={`${root}:${treeVersion}`} root={root} selected={doc?.path ?? null} onOpen={onNewTab ? (path) => onNewTab(path, root) : openDocument} onOpenNew={openDocumentInNewWindow} onSearch={openFolderSearch} onChooseFolder={() => void chooseFolder()} /></ResizableSidebar>}
       <section className="reader-pane">
         {doc && restoredPath === doc.path && <div className="position-notice" role="status"><span>已回到上次阅读位置</span><button onClick={() => { preserveAnchor(); if (scrollRef.current) scrollRef.current.scrollTop = 0; pendingAnchor.current = null; setRestoredPath(null); }}>返回文首</button><button aria-label="关闭位置提示" onClick={() => setRestoredPath(null)}><X /></button></div>}
         {doc && <div className="reading-progress-track" aria-label={`阅读进度 ${Math.round(readingProgress * 100)}%`}><span style={{ width: `${readingProgress * 100}%` }} /></div>}
@@ -827,7 +935,7 @@ export default function App() {
           <button onClick={() => navigateFind(1)} disabled={!findMatches.length} title="下一个 (Enter)"><ChevronDown /></button>
           <button onClick={() => setFindOpen(false)} title="关闭"><X /></button>
         </div>}
-        {doc ? <div ref={scrollRef} className="reader-scroll" style={readerStyle} onScroll={saveReadingPosition} onWheel={() => { userScrollGeneration.current++; }} onTouchStart={() => { userScrollGeneration.current++; }} onPointerDown={() => { userScrollGeneration.current++; }} onKeyDown={() => { userScrollGeneration.current++; }} onMouseUp={() => captureHighlightSelection()} onContextMenu={(event) => { if (!globalThis.getSelection()?.isCollapsed) { event.preventDefault(); captureHighlightSelection(true); } }}>
+        {doc ? <div ref={scrollRef} className="reader-scroll" style={readerStyle} onScroll={() => { saveReadingPosition(); setHighlightPopover(null); }} onWheel={() => { userScrollGeneration.current++; }} onTouchStart={() => { userScrollGeneration.current++; }} onPointerDown={() => { userScrollGeneration.current++; }} onKeyDown={() => { userScrollGeneration.current++; }} onMouseUp={handleReaderMouseUp} onContextMenu={(event) => { if (!globalThis.getSelection()?.isCollapsed) { event.preventDefault(); captureHighlightSelection(true); } }}>
           <MarkdownReader document={doc} night={presentation.night} showFrontmatter={preferences.showFrontmatter} remoteImagePolicy={preferences.remoteImagePolicy} allowedRemoteHosts={preferences.allowedRemoteHosts} onAllowRemoteHost={allowRemoteHost} onOpenDocument={openDocument} />
         </div> : <div className="welcome">
           {root ? <><h1>选择一篇文档</h1><p>{!sidebarsHidden && (narrow ? narrowTreeOpen : showTree) ? "从左侧选择一篇文档，开始阅读。" : "从文件列表中选择要阅读的 Markdown 文件。"}</p>{(sidebarsHidden || !(narrow ? narrowTreeOpen : showTree)) && <button className="primary" onClick={() => { setFocusMode(false); if (narrow) setNarrowTreeOpen(true); else setShowTree(true); }}>打开文件列表</button>}</>
@@ -835,20 +943,21 @@ export default function App() {
           {!root && !!recentRoots.length && <div className="recent-roots"><strong><FolderClock />最近阅读</strong>{recentRoots.slice(0, 5).map((recent) => <button key={recent.path} onClick={() => void applyTarget(recent.path)} title={recent.path}><span>{rootName(recent.path)}</span><small>{recent.path}</small></button>)}</div>}
         </div>}
       </section>
-      {!sidebarsHidden && (narrow ? narrowOutlineOpen : showOutline) && doc && <aside ref={outlineSidebar} className={`right-sidebar ${narrow ? "overlay-sidebar" : ""}`}>
+      {outlineVisible && <ResizableSidebar ref={outlineSidebar} side="right" width={Math.min(fitted.right, outlineMax)} maxWidth={outlineMax} overlay={narrow} onResize={(width) => { preserveAnchor(); setOutlineWidth(width); }}>
         <div className="sidebar-tabs"><button className={rightTab === "outline" ? "active" : ""} onClick={() => setRightTab("outline")}>大纲</button><button className={rightTab === "highlights" ? "active" : ""} onClick={() => setRightTab("highlights")}>高亮 {resolvedHighlights.length > 0 && <span>{resolvedHighlights.length}</span>}</button></div>
         {rightTab === "outline" ? <>
           <nav className="outline">{outline.length <= 1 ? <div className="outline-empty">{outline[0] && <button onClick={() => navigateHeading(outline[0].id)}>返回文首</button>}<p>这篇文档没有分节。</p></div> : outline.map((item) => <button key={item.id} className={activeHeading === item.id ? "active" : ""} aria-current={activeHeading === item.id ? "location" : undefined} style={{ paddingLeft: `${10 + Math.min(item.level - 1, 3) * 10}px` }} onClick={() => { navigateHeading(item.id); if (narrow) setNarrowOutlineOpen(false); }}>{item.text}</button>)}</nav></>
           : <div className="highlights-panel">
+            <button className="annotation-manage-button" onClick={() => { setHighlightPopover(null); setAnnotationManagerOpen(true); }}><Highlighter />找回、备份与回收站</button>
             <div className="highlight-section-title"><span>当前文档</span><small>{resolvedHighlights.filter((item) => !item.orphaned).length}/{resolvedHighlights.length}</small></div>
             {!resolvedHighlights.length && <p className="highlight-empty">选中正文后即可添加高亮。记录只保存在应用数据库中。</p>}
             {resolvedHighlights.map((item) => <div key={item.id} className={`highlight-card color-${item.color} ${item.orphaned ? "orphaned" : ""}`}>
               <button className="highlight-quote" onClick={() => navigateToStoredHighlight(item)} title={item.orphaned ? "原文变化后已无法定位" : "跳转到高亮"}><span>{item.quote}</span>{item.orphaned && <small>待恢复</small>}</button>
-              <div className="highlight-card-actions">{HIGHLIGHT_COLORS.map((color) => <button key={color} className={`highlight-color color-${color} ${item.color === color ? "active" : ""}`} title={`改为${color}`} aria-label={`改为${color}`} onClick={() => void changeHighlightColor(item.id, color, item.path)} />)}<button className="highlight-delete" title="删除高亮" aria-label="删除高亮" onClick={() => void deleteHighlight(item.id, item.path)}><Trash2 /></button></div>
+              <div className="highlight-card-actions">{HIGHLIGHT_COLORS.map((color) => <button key={color} className={`highlight-color color-${color} ${item.color === color ? "active" : ""}`} title={`改为${HIGHLIGHT_COLOR_LABELS[color]}`} aria-label={`改为${HIGHLIGHT_COLOR_LABELS[color]}`} onClick={() => void changeHighlightColor(item.id, color, item.path)} />)}<button className="highlight-delete" title="删除高亮" aria-label="删除高亮" onClick={() => void deleteHighlight(item.id, item.path)}><Trash2 /></button></div>
             </div>)}
             {!!recentHighlights.some((item) => item.path !== doc.path) && <><div className="highlight-section-title recent"><span>最近高亮</span></div>{recentHighlights.filter((item) => item.path !== doc.path).slice(0, 30).map((item) => <button key={item.id} className={`recent-highlight color-${item.color}`} onClick={() => navigateToStoredHighlight(item)}><small>{rootName(item.path)}</small><span>{item.quote}</span></button>)}</>}
           </div>}
-      </aside>}
+      </ResizableSidebar>}
     </main>
 
     {searchOpen && root && <SearchPanel root={root} onOpen={(path, query) => { pendingSearch.current = query; setFindQuery(query); setFindOpen(true); openDocument(path); }} onOpenNew={openDocumentInNewWindow} onClose={closeFolderSearch} />}
@@ -859,10 +968,12 @@ export default function App() {
       <label className="switch-row"><input type="checkbox" checked={preferences.pdfIncludeHighlights} onChange={(event) => updatePreferences({ ...preferences, pdfIncludeHighlights: event.target.checked })} />保留文本高亮</label>
       <button className="primary" onClick={() => { setPrintOptionsOpen(false); void exportPdf(); moreTrigger.current?.focus(); }}><Printer />继续打印</button>
     </section></div>}
-    {highlightPopover && <div className="highlight-popover" style={{ left: highlightPopover.x, top: highlightPopover.y }} role="toolbar" aria-label="添加高亮" onMouseDown={(event) => event.preventDefault()}>
-      {HIGHLIGHT_COLORS.map((color) => <button key={color} className={`highlight-color color-${color}`} title={`添加${color}高亮`} aria-label={`添加${color}高亮`} onClick={() => void createHighlight(highlightPopover.draft, color)} />)}
-      <button className="highlight-cancel" title="取消" aria-label="取消" onClick={() => { globalThis.getSelection()?.removeAllRanges(); setHighlightPopover(null); }}><X /></button>
-    </div>}
+    {annotationManagerOpen && <AnnotationManager root={root} onChooseFolder={() => void chooseFolder()} onClose={() => { setAnnotationManagerOpen(false); requestAnimationFrame(() => moreTrigger.current?.focus()); }} />}
+    {highlightPopover && <HighlightToolbar x={highlightPopover.x} y={highlightPopover.y} color={highlightPopover.highlight?.color}
+      onColor={(color) => { if (highlightPopover.highlight) void changeHighlightColor(highlightPopover.highlight.id, color, highlightPopover.highlight.path); else void createHighlight(highlightPopover.draft, color); }}
+      onDelete={highlightPopover.highlight ? () => void deleteHighlight(highlightPopover.highlight!.id, highlightPopover.highlight!.path) : undefined}
+      onClose={() => setHighlightPopover(null)} />}
+    {deletedHighlight && <div className="annotation-undo" role="status"><span>高亮已移入回收站</span><button onClick={() => void undoHighlightDelete()}>撤销删除</button><button aria-label="关闭撤销提示" onClick={() => setDeletedHighlight(null)}><X /></button></div>}
     {message && <div className="toast">{message}</div>}
   </div>;
 }

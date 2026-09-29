@@ -1,6 +1,6 @@
 import { primaryModifier, shortcutLabel } from "../lib/platform";
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useTabInvoke } from "../lib/tabContext";
 import { FileSearch, LoaderCircle, Search, X } from "lucide-react";
 import type { SearchResponse, SearchResult } from "../types";
 import { trapTab } from "../lib/focus";
@@ -8,6 +8,7 @@ import { trapTab } from "../lib/focus";
 type Props = { root: string; onOpen: (path: string, query: string) => void; onOpenNew: (path: string) => void; onClose: () => void };
 
 export default function SearchPanel({ root, onOpen, onOpenNew, onClose }: Props) {
+  const invoke = useTabInvoke();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);

@@ -18,6 +18,10 @@ run('pnpm', ['test']);
 run('cargo', ['fmt', '--manifest-path', 'src-tauri/Cargo.toml', '--', '--check']);
 run('cargo', ['clippy', '--locked', '--manifest-path', 'src-tauri/Cargo.toml', '--all-targets', '--', '-D', 'warnings']);
 run('cargo', ['test', '--locked', '--manifest-path', 'src-tauri/Cargo.toml']);
+run('pnpm', ['exec', 'playwright', 'install', 'webkit']);
+for (const check of ['tabs', 'sidebar-sizing', 'image-sizing', 'image-scroll', 'image-preview']) {
+  run(process.execPath, [`scripts/qa-${check}.mjs`], { ...process.env, QA_BROWSER: 'webkit' });
+}
 run(process.execPath, ['node_modules/@tauri-apps/cli/tauri.js', 'build', '--target', target, '--bundles', 'app,dmg', '--', '--locked'], {
   ...process.env, APPLE_SIGNING_IDENTITY: process.env.APPLE_SIGNING_IDENTITY || '-',
 });
@@ -25,6 +29,7 @@ run(process.execPath, ['node_modules/@tauri-apps/cli/tauri.js', 'build', '--targ
 const { version, productName } = JSON.parse(fs.readFileSync(path.join(project, 'src-tauri/tauri.conf.json'), 'utf8'));
 const bundle = path.join(project, 'src-tauri/target', target, 'release/bundle');
 const app = path.join(bundle, 'macos', `${productName}.app`);
+run(process.execPath, ['scripts/qa-macos-smoke.mjs', app]);
 const output = path.join(project, 'release', 'macos', target, version);
 fs.mkdirSync(output, { recursive: true });
 // Verify both slices of the universal binary before archiving the bundle.

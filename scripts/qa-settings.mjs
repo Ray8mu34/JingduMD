@@ -21,6 +21,19 @@ try {
     await page.getByRole("button", { name: "阅读设置" }).click();
     const dialog = page.getByRole("dialog", { name: "阅读设置" });
     await dialog.waitFor();
+    assert(await dialog.getByRole("radiogroup", { name: "外观" }).getByRole("radio").count() === 6, "expected six appearances");
+    const geometry = () => page.locator(".markdown-body").evaluate((body) => {
+      const heading = body.querySelector("h2");
+      return [getComputedStyle(body).fontFamily, getComputedStyle(body).fontSize, getComputedStyle(body).lineHeight, body.getBoundingClientRect().width, getComputedStyle(heading).fontSize, getComputedStyle(heading).marginTop];
+    });
+    const initialGeometry = JSON.stringify(await geometry());
+    for (const [name, bg] of [["人文", "rgb(245, 238, 230)"], ["墨水", "rgb(235, 235, 230)"]]) {
+      await dialog.getByRole("radio", { name, exact: true }).check();
+      assert(JSON.stringify(await geometry()) === initialGeometry, `${name} changed typography`);
+      assert(await page.locator(".app").evaluate((el) => getComputedStyle(el).backgroundColor) === bg, `${name} palette mismatch`);
+      await page.screenshot({ path: join(output, `appearance-${name}-${width}.png`) });
+    }
+    await dialog.getByRole("radio", { name: "暖纸", exact: true }).check();
     assert(await dialog.locator(".quick-row").count() === 5, `${width}: missing quick controls`);
     const dimensions = await dialog.locator(".simple-settings-body").evaluate((element) => ({ scroll: element.scrollHeight, client: element.clientHeight }));
     assert(dimensions.scroll <= dimensions.client + 2, `${width}: quick controls need internal scrolling`);
@@ -37,6 +50,7 @@ try {
     await dialog.getByRole("button", { name: "撤销" }).click();
     await page.waitForFunction(() => window.__JINGREADER_QA__.saves.at(-1)?.fontSize === 18.5);
     await dialog.getByRole("button", { name: /详细排版/ }).click();
+    assert(await page.getByText("兼容样式", { exact: true }).count() === 0, "compatibility entry remains");
     assert(await page.getByRole("dialog", { name: "段落与细节" }).count() === 1, "detail page did not replace quick page");
     await page.keyboard.press("Escape");
     assert(await page.getByRole("dialog", { name: "阅读设置" }).count() === 1, "Escape did not return to quick page");
@@ -76,10 +90,10 @@ try {
     const app = document.querySelector(".app"), body = document.querySelector(".markdown-body"), heading = body.querySelector("h2");
     return { theme: [...app.classList].find((name) => name.startsWith("theme-")), font: getComputedStyle(body).fontFamily, headingSize: getComputedStyle(heading).fontSize, leading: getComputedStyle(body).lineHeight, imageBrightness: getComputedStyle(document.querySelector(".reader-scroll")).getPropertyValue("--image-brightness"), bg: getComputedStyle(app).backgroundColor, legacy: app.classList.contains("style-legacy") };
   });
-  assert(after.legacy && after.theme === before.theme && after.font === before.font && after.headingSize === before.headingSize && after.leading === before.leading && after.imageBrightness === before.imageBrightness, "legacy appearance changed geometry, font, brightness or mode");
+  assert(!after.legacy && after.theme === "theme-night" && after.font === before.font && after.headingSize === before.headingSize && after.leading === before.leading && after.imageBrightness === before.imageBrightness, "migrated appearance changed geometry, font, brightness or retained legacy mode");
   assert(after.bg === "rgb(28, 31, 34)", "legacy appearance did not change paper color");
   await dialog.getByRole("radio", { name: "舒展", exact: true }).check();
-  assert(await page.locator(".app.style-legacy.theme-technical").count() === 1, "legacy leading changed typography mode");
+  assert(await page.locator(".app.style-canonical.profile-reading").count() === 1, "old layout was not retired");
   await page.screenshot({ path: join(output, "refinement-legacy-night-1100.png") });
   await page.close();
   const shared = await browser.newPage({ viewport: { width: 1100, height: 900 } });
@@ -100,5 +114,5 @@ try {
   const merged = await shared.evaluate(() => window.__JINGREADER_QA__.saves.at(-1));
   assert(merged.appearance === "night" && merged.remoteImagePolicy === "allow" && merged.personalTypographies[0]?.id === "another", "undo overwrote another window's update");
   await shared.close();
-  console.log("Full App settings, five quick controls, detail navigation, lazy fonts, undo, anchor and legacy appearance passed.");
+  console.log("Six appearances, palette-only changes, retired legacy layout, detail navigation, lazy fonts, undo and persistence passed.");
 } finally { await browser.close(); await server.close(); }

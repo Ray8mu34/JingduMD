@@ -39,7 +39,8 @@ export function restoreTextAnchor(container: HTMLElement, anchor: TextAnchor): b
   }
   if (!target) return false;
   const text = target.textContent ?? "";
-  const offset = anchor.context && text.includes(anchor.context)
+  const contextUnchanged = text.slice(Math.max(0, anchor.textOffset - 20), anchor.textOffset + 20) === anchor.context;
+  const offset = !contextUnchanged && anchor.context && text.includes(anchor.context)
     ? text.indexOf(anchor.context) + Math.min(20, anchor.textOffset)
     : Math.min(text.length, anchor.textOffset);
   let currentTop = target.getBoundingClientRect().top;

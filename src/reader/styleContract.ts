@@ -1,5 +1,5 @@
 import type { AppearanceId, ReaderPreferences, ReaderThemeId } from "../types";
-import { isDarkTheme, resolveReadingStyle } from "../lib/readerPreferences";
+import { resolveReadingStyle } from "../lib/readerPreferences";
 
 export type ReaderTypography = Pick<ReaderPreferences,
   "fontSize" | "lineHeight" | "contentWidth" | "paragraphSpacing" | "fontFamily" |
@@ -32,9 +32,9 @@ export function resolveReaderStyle(preferences: ReaderPreferences): { typography
     quoteStyle: value.quoteStyle, tableStyle: value.tableStyle, codeWrap: value.codeWrap,
     codeScale: value.codeScale, formulaScale: value.formulaScale, imageStyle: value.imageStyle
   };
-  const id = preferences.styleMode === "legacy" ? preferences.legacyAppearance : preferences.appearance;
+  const id = value.appearance;
   return { typography, appearance: {
-    id, theme: value.theme, night: id ? id === "night" || id === "nord" : isDarkTheme(value.theme),
+    id, theme: value.theme, night: id === "night" || id === "nord",
     warmth: value.backgroundWarmth, contrast: value.textContrast, imageBrightness: value.imageBrightness
   }, readingFocus: value.readingFocus };
 }

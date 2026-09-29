@@ -23,7 +23,7 @@ try {
     return { width: rect.width, bodySize: getComputedStyle(article).fontSize, leading: getComputedStyle(article).lineHeight, headingSize: getComputedStyle(heading).fontSize, paragraphGap: getComputedStyle(paragraph).marginBottom, shellHeight: document.querySelector(".topbar").getBoundingClientRect().height, selection: getSelection().toString() };
   });
   assert(before.selection.length === 6, "selection proof was not created");
-  for (const name of ["素白", "静谧夜读", "Nord 极夜", "暖纸"]) {
+  for (const name of ["素白", "静谧夜读", "Nord 极夜", "人文", "墨水", "暖纸"]) {
     await page.getByRole("radio", { name }).check();
     const current = await page.evaluate(() => {
       const article = document.querySelector(".markdown-body");

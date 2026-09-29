@@ -8,6 +8,7 @@ use tauri::{
 };
 
 use crate::FontFaces;
+use tauri_plugin_dialog::DialogExt;
 
 pub fn font_faces(font: &CTFont) -> FontFaces {
     let mask = kCTFontBoldTrait | kCTFontItalicTrait;
@@ -86,12 +87,19 @@ pub fn install_menu(app: &AppHandle) -> tauri::Result<()> {
                 "文件",
                 true,
                 &[
+                    &action("reader-new-tab", "新建标签页", "CmdOrCtrl+T")?,
+                    &action("reader-new-window", "新建窗口", "CmdOrCtrl+N")?,
                     &action("reader-open-file", "打开文件…", "CmdOrCtrl+O")?,
                     &action("reader-open-folder", "打开文件夹…", "CmdOrCtrl+Alt+O")?,
-                    &action("reader-new-window", "在对照窗口打开", "CmdOrCtrl+Shift+N")?,
+                    &action(
+                        "reader-open-in-new-window",
+                        "在新窗口打开当前文章",
+                        "CmdOrCtrl+Shift+N",
+                    )?,
                     &PredefinedMenuItem::separator(app)?,
                     &action("reader-export-pdf", "导出 PDF…", "CmdOrCtrl+Shift+D")?,
-                    &PredefinedMenuItem::close_window(app, Some("关闭窗口"))?,
+                    &action("reader-close-tab", "关闭标签页", "CmdOrCtrl+W")?,
+                    &action("reader-close-window", "关闭窗口", "CmdOrCtrl+Shift+W")?,
                 ],
             )?,
             &Submenu::with_items(
@@ -129,6 +137,9 @@ pub fn install_menu(app: &AppHandle) -> tauri::Result<()> {
                 &[
                     &PredefinedMenuItem::minimize(app, Some("最小化"))?,
                     &PredefinedMenuItem::maximize(app, Some("缩放"))?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &action("reader-next-tab", "下一个标签页", "Ctrl+Tab")?,
+                    &action("reader-previous-tab", "上一个标签页", "Ctrl+Shift+Tab")?,
                 ],
             )?,
         ],
@@ -139,13 +150,47 @@ pub fn install_menu(app: &AppHandle) -> tauri::Result<()> {
         if !action.starts_with("reader-") {
             return;
         }
+        if app.webview_windows().is_empty()
+            && matches!(action, "reader-open-file" | "reader-open-folder")
+        {
+            let handle = app.clone();
+            let selected = move |file: Option<tauri_plugin_dialog::FilePath>| {
+                if let Some(path) = file.and_then(|file| file.into_path().ok()) {
+                    crate::open_external_target(&handle, crate::to_string(&path));
+                }
+            };
+            if action == "reader-open-folder" {
+                app.dialog().file().pick_folder(selected);
+            } else {
+                app.dialog()
+                    .file()
+                    .add_filter("Markdown", &["md", "markdown"])
+                    .pick_file(selected);
+            }
+            return;
+        }
+        if action == "reader-new-window"
+            || (action == "reader-new-tab" && app.webview_windows().is_empty())
+        {
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = crate::create_reader_window(&app, None) {
+                    eprintln!("无法新建窗口：{error}");
+                }
+            });
+            return;
+        }
         // Menus belong to the app: send to the active reader only, never every webview.
         let window = app
             .webview_windows()
             .into_values()
             .find(|window| window.is_focused().unwrap_or(false))
-            .or_else(|| app.get_webview_window("main"));
+            .or_else(|| app.webview_windows().into_values().next());
         if let Some(window) = window {
+            if action == "reader-close-window" {
+                window.close().ok();
+                return;
+            }
             window.unminimize().ok();
             window.show().ok();
             window.set_focus().ok();

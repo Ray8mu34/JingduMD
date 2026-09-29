@@ -72,10 +72,10 @@ describe("reader presets", () => {
     const value = { ...DEFAULT_PREFERENCES, customProfiles: [{ id: "mine", name: "我的样式", recipe }] };
     expect(matchingCustomProfile(value)?.id).toBe("mine");
   });
-  it("keeps old styles through idempotent migration", () => {
+  it("retires legacy layout through idempotent migration", () => {
     const old = { theme: "nord" as const, chineseFont: "SimSun", customProfiles: [{ id: "old", name: "旧样式", recipe: recipeFromPreferences(DEFAULT_PREFERENCES) }] };
     const first = migratePreferences(old);
-    expect(first).toMatchObject({ styleMode: "legacy", theme: "nord", chineseFont: "SimSun", showTree: true, showOutline: true });
+    expect(first).toMatchObject({ schemaVersion: 3, styleMode: "canonical", appearance: "nord", showTree: true, showOutline: true });
     expect(migratePreferences(first)).toEqual(first);
   });
   it("separates canonical appearance, typography and reading behavior", () => {
@@ -104,21 +104,29 @@ describe("reader presets", () => {
     expect(resolveReadingStyle(reset).chineseHeadingFont).toBe("");
     expect(resolveReadingStyle(reset).headingFont).toBe("Georgia");
   });
-  it("changes only color selection for every legacy preset", () => {
-    for (const preset of READER_PRESETS) {
-      const original = { ...applyPreset(DEFAULT_PREFERENCES, preset.id), chineseFont: "SimSun", imageBrightness: 67 };
-      for (const appearance of ["warm", "white", "night", "nord"] as const) {
+  it("keeps custom typography unchanged across all six appearances", () => {
+    for (const typographyProfile of ["reading", "study"] as const) {
+      const original = setTypographyOverride({ ...DEFAULT_PREFERENCES, typographyProfile, fontSize: 22, imageBrightness: 67 }, "lineHeight", 2);
+      for (const appearance of ["warm", "white", "night", "nord", "humanist", "eink"] as const) {
         const next = chooseAppearance(original, appearance);
-        expect(next).toEqual({ ...original, appearance, legacyAppearance: appearance });
-        expect(resolveReadingStyle(next).lineHeight).toBe(original.lineHeight);
-        expect(resolveReadingStyle(next).headingScale).toBe(original.headingScale);
+        expect(next).toEqual({ ...original, appearance });
+        expect(resolveReadingStyle(next).lineHeight).toBe(2);
+        expect(resolveReadingStyle(next).headingScale).toBe(resolveReadingStyle(original).headingScale);
         expect(next.imageBrightness).toBe(67);
       }
     }
   });
-  it("preserves old color override on migration and clears it on preset selection", () => {
-    const changed = chooseAppearance(applyPreset(DEFAULT_PREFERENCES, "technical"), "night");
-    expect(migratePreferences(changed).legacyAppearance).toBe("night");
-    expect(applyPreset(changed, "paper").legacyAppearance).toBeNull();
+  it("maps legacy humanist and eink colors without carrying over their layout", () => {
+    for (const theme of ["humanist", "eink"] as const) {
+      const next = migratePreferences(applyPreset(DEFAULT_PREFERENCES, theme));
+      expect(next.appearance).toBe(theme);
+      expect(next.legacyAppearance).toBeNull();
+      expect(resolveReadingStyle(next).paragraphStyle).toBe("spacing");
+      expect(resolveReadingStyle(next).lineHeight).toBe(1.85);
+      expect(resolveReadingStyle(next).backgroundWarmth).toBe(0);
+      expect(migratePreferences(next)).toEqual(next);
+    }
+    const overridden = migratePreferences({ ...applyPreset(DEFAULT_PREFERENCES, "humanist"), legacyAppearance: "white" });
+    expect(overridden.appearance).toBe("white");
   });
 });

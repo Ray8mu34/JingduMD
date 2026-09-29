@@ -7,8 +7,8 @@
         "title": "静读 Markdown",
         "width": 1380,
         "height": 900,
-        "minWidth": 760,
-        "minHeight": 520,
+        "minWidth": 560,
+        "minHeight": 420,
         "center": true,
         "decorations": true,
         "shadow": true

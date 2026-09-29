@@ -1,13 +1,14 @@
 import { primaryModifier, shortcutLabel } from "../lib/platform";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { invoke } from "@tauri-apps/api/core";
+import { useTabInvoke } from "../lib/tabContext";
 import { AppWindow, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, Search } from "lucide-react";
 import type { DirectoryEntry } from "../types";
 
 type Props = { root: string; selected: string | null; onOpen: (path: string) => void; onOpenNew: (path: string) => void; onSearch?: () => void; onChooseFolder?: () => void };
 
 function TreeNode({ entry, selected, onOpen, onOpenNew, expandedPaths }: { entry: DirectoryEntry; selected: string | null; onOpen: (path: string) => void; onOpenNew: (path: string) => void; expandedPaths: Set<string> }) {
+  const invoke = useTabInvoke();
   const [expanded, setExpanded] = useState(expandedPaths.has(entry.path));
   const [children, setChildren] = useState<DirectoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -46,6 +47,7 @@ function TreeNode({ entry, selected, onOpen, onOpenNew, expandedPaths }: { entry
 }
 
 export default function FileTree({ root, selected, onOpen, onOpenNew, onSearch, onChooseFolder }: Props) {
+  const invoke = useTabInvoke();
   const [entries, setEntries] = useState<DirectoryEntry[]>([]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");

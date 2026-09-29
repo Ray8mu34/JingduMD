@@ -118,7 +118,10 @@ function resolveWithMap(root: HTMLElement, map: ArticleTextMap, highlight: TextH
     candidates.push(index);
     from = index + Math.max(1, highlight.quote.length);
   }
-  const start = candidates.sort((left, right) => contextScore(root, map, right, highlight) - contextScore(root, map, left, highlight))[0];
+  candidates.sort((left, right) => contextScore(root, map, right, highlight) - contextScore(root, map, left, highlight));
+  // Distance alone is not enough evidence when the same quote occurs twice.
+  const ambiguous = candidates.length > 1 && contextScore(root, map, candidates[0], highlight) - contextScore(root, map, candidates[1], highlight) < 1;
+  const start = ambiguous ? undefined : candidates[0];
   const range = start === undefined ? null : rangeForOffsets(map, start, start + highlight.quote.length);
   return { ...highlight, range, orphaned: !range };
 }
@@ -161,3 +164,10 @@ export function scrollToHighlight(item: ResolvedHighlight | undefined): boolean 
 }
 
 export const HIGHLIGHT_COLORS = COLORS;
+export const HIGHLIGHT_COLOR_LABELS: Record<HighlightColor, string> = { yellow: "黄色", green: "绿色", blue: "蓝色", pink: "粉色" };
+
+export function highlightAtPoint(items: ResolvedHighlight[], x: number, y: number): ResolvedHighlight | undefined {
+  return items.filter((item) => item.range && [...item.range.getClientRects()].some((rect) =>
+    rect.width > 0 && rect.height > 0 && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+  )).sort((a, b) => a.quote.length - b.quote.length || b.updatedMs - a.updatedMs)[0];
+}

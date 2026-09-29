@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { articleTextMap, rangeForOffsets, resolveHighlight, selectionToHighlight } from "./highlights";
+import { articleTextMap, highlightAtPoint, rangeForOffsets, resolveHighlight, selectionToHighlight } from "./highlights";
 import type { TextHighlight } from "../types";
 
 function stored(overrides: Partial<TextHighlight> = {}): TextHighlight {
@@ -52,5 +52,20 @@ describe("text highlight anchoring", () => {
     root.innerHTML = "<p>前半<strong>后半</strong></p>";
     const range = rangeForOffsets(articleTextMap(root), 1, 4);
     expect(range?.toString()).toBe("半后半");
+  });
+
+  it("keeps an ambiguous repeated quote orphaned instead of guessing by distance", () => {
+    const root = document.createElement("article");
+    root.innerHTML = "<p>重点内容</p><p>重点内容</p>";
+    expect(resolveHighlight(root, stored({ prefix: "", suffix: "", headingId: null, startOffset: 0 })).orphaned).toBe(true);
+  });
+
+  it("hits the actual text rectangles, including wrapped lines, not the empty gap", () => {
+    const range = document.createRange();
+    Object.assign(range, { getClientRects: () => [{ left: 20, right: 60, top: 10, bottom: 25, width: 40, height: 15 }, { left: 0, right: 20, top: 30, bottom: 45, width: 20, height: 15 }] });
+    const item = { ...stored(), range, orphaned: false };
+    expect(highlightAtPoint([item], 10, 35)?.id).toBe(1);
+    expect(highlightAtPoint([item], 30, 35)).toBeUndefined();
+    expect(highlightAtPoint([item], 30, 27)).toBeUndefined();
   });
 });

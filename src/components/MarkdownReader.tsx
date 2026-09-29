@@ -1,4 +1,5 @@
-import { Children, cloneElement, createContext, createElement, isValidElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Children, cloneElement, createContext, createElement, isValidElement, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import ImagePreview from "./ImagePreview";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -8,11 +9,14 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { PluggableList } from "unified";
 import DOMPurify from "dompurify";
-import { invoke } from "@tauri-apps/api/core";
+import { useTabInvoke } from "../lib/tabContext";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronDown, ChevronRight, Code2, Image as ImageIcon, Maximize2, Scan, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronDown, ChevronRight, Code2, Image as ImageIcon, Maximize2, SlidersHorizontal } from "lucide-react";
 import type { AssetPayload, DocumentPayload } from "../types";
 import { isExternalUrl, resolveLocalPath } from "../lib/paths";
+import { holdImageResizeScroll } from "../lib/imageResizeScroll";
+import { imageSizeKey, readImageWidth, saveImageWidth } from "../lib/imageSizing";
+import { useOutsideDismiss } from "../lib/useOutsideDismiss";
 import { normalizeTexDelimiters, remarkCallouts, remarkHeadingIds, remarkSanitizeHtml, remarkWikiLinks, splitFrontmatter } from "../lib/markdown";
 
 const markdownSanitizeSchema = {
@@ -64,16 +68,42 @@ function LocalImage({ documentPath, source, alt, remotePolicy, allowedRemoteHost
   onAllowRemoteHost: (host: string) => void;
   loadMargin: string;
 }) {
+  const invoke = useTabInvoke();
   const { ref, visible } = useVisible<HTMLSpanElement>(loadMargin);
   const [url, setUrl] = useState("");
   const [error, setError] = useState(false);
   const [allowOnce, setAllowOnce] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  const [previewScale, setPreviewScale] = useState(1);
-  const previewRef = useRef<HTMLDivElement>(null);
-  const previewCaller = useRef<HTMLButtonElement | null>(null);
-  const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const sizeKey = imageSizeKey(documentPath, source);
+  const [displayWidth, setDisplayWidth] = useState(() => readImageWidth(sizeKey));
+  const [naturalWidth, setNaturalWidth] = useState(0);
+  const [naturalHeight, setNaturalHeight] = useState(0);
+  const [renderedWidth, setRenderedWidth] = useState(0);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const resizeRef = useRef<{ x: number; y: number; width: number } | null>(null);
+  const scrollHold = useRef<ReturnType<typeof holdImageResizeScroll> | null>(null);
+  const finishResize = () => { resizeRef.current = null; scrollHold.current?.finish(); scrollHold.current = null; };
+  useLayoutEffect(() => { scrollHold.current?.stabilize(); }, [displayWidth]);
+  useEffect(() => () => { scrollHold.current?.finish(); }, []);
+  const percent = displayWidth ?? (naturalWidth ? Math.round(renderedWidth / naturalWidth * 100) : 100);
+  const [scaleDraft, setScaleDraft] = useState(String(percent));
+  useEffect(() => setScaleDraft(String(percent)), [percent]);
+  useEffect(() => {
+    const image = imageRef.current;
+    if (!image) return;
+    const observer = new ResizeObserver(() => setRenderedWidth(image.getBoundingClientRect().width));
+    observer.observe(image);
+    return () => observer.disconnect();
+  }, [url, collapsed]);
+  const [sizing, setSizing] = useState(false);
+  const actionsRef = useRef<HTMLSpanElement>(null);
+  useOutsideDismiss(sizing, [actionsRef], () => setSizing(false));
+  const changeWidth = (width: number | null) => {
+    setDisplayWidth(width);
+    saveImageWidth(sizeKey, width);
+  };
+  const previewCaller = useRef<HTMLElement | null>(null);
   const printCollapsed = useRef(false);
   const isRemote = /^https?:/i.test(source);
   const host = isRemote ? remoteHost(source) : "";
@@ -83,7 +113,6 @@ function LocalImage({ documentPath, source, alt, remotePolicy, allowedRemoteHost
     setUrl("");
     setError(false);
     setCollapsed(false);
-    setPreviewScale(1);
     if (!visible) return;
     if (/^data:/i.test(source)) { setUrl(source); return; }
     let objectUrl = "";
@@ -118,13 +147,28 @@ function LocalImage({ documentPath, source, alt, remotePolicy, allowedRemoteHost
   return <span ref={ref} className={`image-frame ${collapsed ? "is-collapsed" : ""}`}>
     {url ? <>{collapsed
       ? <span className="collapsed-media"><ImageIcon /><span title={imageLabel}>{imageLabel}</span><button type="button" onClick={() => setCollapsed(false)} title="展开图片"><ChevronRight />展开图片</button></span>
-      : <><span className="image-actions" aria-label="图片操作"><button type="button" onClick={() => setCollapsed(true)} title="折叠图片"><ChevronDown />折叠</button><button type="button" onClick={(event) => { previewCaller.current = event.currentTarget; setZoomed(true); }} title="放大查看图片"><Maximize2 />放大</button></span><img src={url} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" onClick={(event) => { if (event.currentTarget.closest("a")) return; event.preventDefault(); event.stopPropagation(); previewCaller.current = ref.current?.querySelector<HTMLButtonElement>('.image-actions button[title="放大查看图片"]') ?? null; setZoomed(true); }} /></>}
-      {zoomed && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label={alt || "图片预览"} onClick={closePreview}>
-        <div className="image-lightbox-toolbar" onClick={(event) => event.stopPropagation()}><button title="缩小" onClick={() => setPreviewScale((value) => Math.max(.5, value - .25))}><ZoomOut /></button><output>{Math.round(previewScale * 100)}%</output><button title="放大" onClick={() => setPreviewScale((value) => Math.min(4, value + .25))}><ZoomIn /></button><button title="适应窗口" onClick={() => setPreviewScale(1)}><Scan /></button><button title="关闭图片预览" onClick={closePreview}><X /></button></div>
-        <div ref={previewRef} className={`image-lightbox-stage ${previewScale > 1 ? "can-drag" : ""}`} onClick={(event) => event.stopPropagation()} onDoubleClick={() => setPreviewScale((value) => value === 1 ? 2 : 1)} onWheel={(event) => { event.preventDefault(); setPreviewScale((value) => Math.max(.5, Math.min(4, value + (event.deltaY < 0 ? .25 : -.25)))); }} onPointerDown={(event) => { const stage = previewRef.current; if (!stage || previewScale <= 1) return; dragRef.current = { x: event.clientX, y: event.clientY, left: stage.scrollLeft, top: stage.scrollTop }; stage.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { const stage = previewRef.current; const drag = dragRef.current; if (!stage || !drag) return; stage.scrollLeft = drag.left - (event.clientX - drag.x); stage.scrollTop = drag.top - (event.clientY - drag.y); }} onPointerUp={() => { dragRef.current = null; }}>
-          <span className="image-lightbox-canvas" style={{ width: `${96 * previewScale}vw`, height: `${88 * previewScale}vh` }}><img src={url} alt={alt ?? ""} draggable={false} /></span>
-        </div>
-      </div>, globalThis.document.body)}</>
+      : <><span ref={actionsRef} className={`image-actions ${sizing ? "is-sizing" : ""}`} aria-label="图片操作" onKeyDown={(event) => {
+        if (event.key === "Escape" && sizing) {
+          event.stopPropagation();
+          setSizing(false);
+          actionsRef.current?.querySelector<HTMLButtonElement>(".image-size-toggle")?.focus();
+        }
+      }}>
+        <button type="button" onClick={() => { setSizing(false); setCollapsed(true); }} title="折叠图片"><ChevronDown />折叠</button>
+        <button className="image-size-toggle" type="button" onClick={() => setSizing((value) => !value)} aria-expanded={sizing} title="调整显示大小"><SlidersHorizontal />大小</button>
+        {sizing && <span className="image-size-panel" role="group" aria-label="图片显示大小">
+          <label><span>原图缩放（%）</span>
+            <input type="number" min="1" max="400" step="1" value={scaleDraft} aria-label="原图缩放百分比" onChange={(event) => { setScaleDraft(event.target.value); const value = Number(event.target.value); if (value >= 1 && value <= 400) changeWidth(value); }} onBlur={() => setScaleDraft(String(percent))} />
+          </label>
+          <span>100% 为原始尺寸；也可拖动图片任意角落。</span>
+          <button type="button" onClick={() => changeWidth(100)}>原始大小（100%）</button>
+          <button type="button" onClick={() => changeWidth(null)} disabled={displayWidth === null}>适应正文</button>
+        </span>}
+      </span><span className="image-viewport"><span className="image-surface" style={{ width: naturalWidth ? displayWidth === null && naturalHeight ? `min(${naturalWidth}px, ${70 * naturalWidth / naturalHeight}vh)` : `${naturalWidth * (displayWidth ?? 100) / 100}px` : undefined, maxWidth: displayWidth === null ? "100%" : "none" }}>
+        <img ref={imageRef} src={url} alt={alt ?? ""} draggable={false} tabIndex={0} loading="lazy" referrerPolicy="no-referrer" onLoad={(event) => { setNaturalWidth(event.currentTarget.naturalWidth); setNaturalHeight(event.currentTarget.naturalHeight); setRenderedWidth(event.currentTarget.getBoundingClientRect().width); }} onKeyDown={(event) => { if ((event.key === "Enter" || event.key === " ") && !event.currentTarget.closest("a")) { event.preventDefault(); previewCaller.current = event.currentTarget; setZoomed(true); } }} onClick={(event) => { if (event.currentTarget.closest("a")) return; event.preventDefault(); event.stopPropagation(); previewCaller.current = event.currentTarget; setZoomed(true); }} />
+        {(["top-left", "top-right", "bottom-left", "bottom-right"] as const).map((corner, index) => <button key={corner} className={`image-resize-handle ${corner}`} type="button" aria-label={`${["左上角", "右上角", "左下角", "右下角"][index]}拖动缩放图片`} title={`${["左上角", "右上角", "左下角", "右下角"][index]}拖动缩放图片 · ${percent}%（双击恢复 100%）`} onClick={(event) => event.stopPropagation()} onDoubleClick={() => changeWidth(100)} onKeyDown={(event) => { if (["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp"].includes(event.key)) { event.preventDefault(); changeWidth(Math.max(1, Math.min(400, percent + (["ArrowLeft", "ArrowDown"].includes(event.key) ? -5 : 5)))); } }} onPointerDown={(event) => { if (event.button !== 0 || !naturalWidth) return; event.preventDefault(); event.stopPropagation(); scrollHold.current = holdImageResizeScroll(event.currentTarget); resizeRef.current = { x: event.clientX, y: event.clientY, width: imageRef.current?.getBoundingClientRect().width ?? naturalWidth }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { const drag = resizeRef.current; if (!drag) return; const dx = (event.clientX - drag.x) * (corner.endsWith("left") ? -1 : 1); const dy = (event.clientY - drag.y) * (corner.startsWith("top") ? -1 : 1) * (naturalWidth / (naturalHeight || naturalWidth)); const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy; changeWidth(Math.max(1, Math.min(400, Math.round((drag.width + delta) / naturalWidth * 100)))); }} onPointerUp={(event) => { finishResize(); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={finishResize} onLostPointerCapture={finishResize}><Maximize2 /></button>)}
+      </span></span></>}
+      {zoomed && createPortal(<ImagePreview src={url} alt={alt || "图片预览"} onClose={closePreview} />, globalThis.document.body)}</>
       : error ? <span className="broken-image">图片无法读取：{source}</span>
       : isRemote && remotePolicy === "block" ? <span className="image-placeholder remote-image-consent">远程图片已阻止<small>{host}</small></span>
       : isRemote && !remoteAllowed ? <span className="image-placeholder remote-image-consent">此文档引用了远程图片<small>{host}</small><span><button onClick={() => setAllowOnce(true)}>仅加载这张</button><button onClick={() => onAllowRemoteHost(host)}>始终允许此站点</button></span></span>
@@ -205,7 +249,7 @@ function MarkdownPre({ children }: { children?: ReactNode }) {
   const child = Children.toArray(children).find(isValidElement);
   const props = child?.props as { className?: string; children?: ReactNode } | undefined;
   const className = props?.className ?? "";
-  if (className.includes("math-") || className.includes("language-mermaid")) return <>{children}</>;
+  if (className.includes("math-") || className.includes("language-math") || className.includes("language-mermaid")) return <>{children}</>;
   const language = /language-([^\s]+)/.exec(className)?.[1] ?? "";
   const value = String(props?.children ?? "").replace(/\n$/, "");
   const lines = value.split("\n");
@@ -364,7 +408,7 @@ export default function MarkdownReader({
   const components = useMemo<Components>(() => ({
     pre: ({ children }) => <MarkdownPre>{children}</MarkdownPre>,
     table: ({ children }) => <ScrollableTable>{children}</ScrollableTable>,
-    img: ({ src, alt }) => src ? <LocalImage documentPath={doc.path} source={src} alt={alt} remotePolicy={remoteImagePolicy} allowedRemoteHosts={allowedRemoteHosts} onAllowRemoteHost={onAllowRemoteHost} loadMargin={loadMargin} /> : null,
+    img: ({ src, alt }) => src ? <LocalImage key={imageSizeKey(doc.path, src)} documentPath={doc.path} source={src} alt={alt} remotePolicy={remoteImagePolicy} allowedRemoteHosts={allowedRemoteHosts} onAllowRemoteHost={onAllowRemoteHost} loadMargin={loadMargin} /> : null,
     blockquote: ({ children, node }) => <CalloutBlock calloutKind={String(node?.properties?.dataCallout ?? "")}>{children}</CalloutBlock>,
     h1: ({ id, children }) => <CollapsibleHeading level={1} id={id}>{children}</CollapsibleHeading>,
     h2: ({ id, children }) => <CollapsibleHeading level={2} id={id}>{children}</CollapsibleHeading>,
@@ -393,7 +437,7 @@ export default function MarkdownReader({
     code: ({ className, children }) => {
       const language = /language-([^\s]+)/.exec(className ?? "")?.[1] ?? "";
       const value = String(children).replace(/\n$/, "");
-      if (language === "math") return <LazyMath source={value} display={(className ?? "").includes("math-display")} loadMargin={loadMargin} />;
+      if (language === "math") return <LazyMath source={value} display={!(className ?? "").includes("math-inline")} loadMargin={loadMargin} />;
       if (language === "mermaid") return <MermaidBlock source={value} loadMargin={loadMargin} />;
       if (!className) return <code>{children}</code>;
       return <LazyCode language={language} value={value} loadMargin={loadMargin} />;
