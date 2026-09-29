@@ -13,12 +13,16 @@ try {
   await page.locator(".markdown-body h1").waitFor();
   const first = page.getByRole("tab", { name: "reader-showcase.md", exact: true });
   await first.waitFor();
-  await page.locator(".reader-scroll").evaluate((element) => { element.scrollTop = 900; });
-  const before = await page.locator(".reader-scroll").evaluate((element) => element.scrollTop);
   await page.getByRole("button", { name: "文件列表", exact: true }).click();
   const left = page.getByRole("separator", { name: "文件栏宽度" });
   await left.focus(); await page.keyboard.press("Home"); await page.keyboard.press("ArrowRight");
   assert.equal(await left.getAttribute("aria-valuenow"), "170");
+  // Compare positions at the same reading width. Opening/resizing the sidebar
+  // reflows text and intentionally restores a text anchor, not an old pixel offset.
+  await page.evaluate(async () => { await document.fonts.ready; await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
+  await page.locator(".reader-scroll").evaluate((element) => { element.dispatchEvent(new WheelEvent("wheel", { bubbles: true })); element.scrollTop = 900; });
+  await page.waitForFunction(() => window.__JINGREADER_QA__.positionWrites.length > 0);
+  const before = await page.locator(".reader-scroll").evaluate((element) => element.scrollTop);
   await page.getByRole("button", { name: "plain-article.md", exact: true }).click();
   await page.getByRole("tab", { name: "plain-article.md", exact: true }).waitFor();
   await page.getByRole("heading", { name: "一篇普通文章" }).waitFor();
@@ -26,7 +30,12 @@ try {
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("jingreader:sidebar-widths:v1")).treeWidth),170);
   await first.click();
   await page.locator(".markdown-body h1").waitFor();
-  await page.waitForFunction((before) => Math.abs(document.querySelector(".reader-scroll").scrollTop - before) < 100, before);
+  try {
+    await page.waitForFunction((before) => Math.abs(document.querySelector(".reader-scroll").scrollTop - before) < 100, before);
+  } catch (error) {
+    console.error("Tab position diagnostic", await page.evaluate((before) => ({ before, after: document.querySelector(".reader-scroll").scrollTop, positions: [...window.__JINGREADER_QA__.positions] }), before));
+    throw error;
+  }
   assert.equal(await left.getAttribute("aria-valuenow"), "170");
   await page.getByRole("button", { name: "在新窗口打开当前标签页" }).click();
   assert.equal(await page.evaluate(() => window.__JINGREADER_QA__.windowRequests.at(-1)), "C:\\qa-fixtures\\reader-showcase.md");
