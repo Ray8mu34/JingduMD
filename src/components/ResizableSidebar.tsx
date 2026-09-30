@@ -46,7 +46,9 @@ const ResizableSidebar = forwardRef<HTMLElement, Props>(function ResizableSideba
         if (start && start.pointerId === event.pointerId) resize(start.width + (event.clientX - start.x) * direction);
       }}
       onPointerUp={(event) => {
-        if (drag.current?.pointerId !== event.pointerId) return;
+        const start = drag.current;
+        if (!start || start.pointerId !== event.pointerId) return;
+        resize(start.width + (event.clientX - start.x) * direction);
         stop();
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       }}

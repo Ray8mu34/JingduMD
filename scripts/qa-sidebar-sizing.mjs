@@ -17,6 +17,18 @@ try {
   }
   const left = page.getByRole("separator", { name: "文件栏宽度" });
   const right = page.getByRole("separator", { name: "大纲栏宽度" });
+  const expectWidth = async (handle, width) => {
+    const element = await handle.elementHandle();
+    await page.waitForFunction(({ element, width }) => element.getAttribute("aria-valuenow") === String(width), { element, width });
+    assert.equal(await handle.getAttribute("aria-valuenow"), String(width));
+    await element.dispose();
+  };
+  const expectSavedWidths = async (treeWidth, outlineWidth) => {
+    await page.waitForFunction(({ treeWidth, outlineWidth }) => {
+      const saved = JSON.parse(localStorage.getItem("jingreader:sidebar-widths:v1") ?? "null");
+      return saved?.treeWidth === treeWidth && saved?.outlineWidth === outlineWidth;
+    }, { treeWidth, outlineWidth });
+  };
   const drag = async (handle, delta) => {
     const box = await handle.boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + 150);
@@ -29,26 +41,31 @@ try {
   const beforeTop = (await anchor.boundingBox()).y;
   const beforeWidth = (await page.locator(".markdown-body").boundingBox()).width;
   await drag(left, -90);
-  assert.equal(await left.getAttribute("aria-valuenow"), "180");
+  await expectWidth(left, "180");
   assert.ok((await page.locator(".markdown-body").boundingBox()).width > beforeWidth, "narrower sidebar did not free article space");
   const afterTop = (await anchor.boundingBox()).y;
   assert.ok(Math.abs(afterTop - beforeTop) < 45, `reading anchor jumped during resize: ${beforeTop} -> ${afterTop}`);
   await drag(right, -70);
-  assert.equal(await right.getAttribute("aria-valuenow"), "300");
+  await expectWidth(right, "300");
   assert.equal(await page.locator("html").evaluate((element) => element.classList.contains("resizing-sidebar")), false);
+  await expectSavedWidths(180, 300);
   await page.reload({ waitUntil: "domcontentloaded" });
   await left.waitFor();
-  assert.equal(await left.getAttribute("aria-valuenow"), "180");
-  assert.equal(await right.getAttribute("aria-valuenow"), "300");
+  await expectWidth(left, "180");
+  await expectWidth(right, "300");
+  await expectSavedWidths(180, 300);
   await left.focus();
   await page.keyboard.press("ArrowRight");
-  assert.equal(await left.getAttribute("aria-valuenow"), "190");
+  await expectWidth(left, "190");
   await right.dblclick();
-  assert.equal(await right.getAttribute("aria-valuenow"), "230");
+  await expectWidth(right, "230");
   await left.focus();
   await page.keyboard.press("End");
+  await expectWidth(left, await left.getAttribute("aria-valuemax"));
   await right.focus();
   await page.keyboard.press("End");
+  await expectWidth(right, await right.getAttribute("aria-valuemax"));
+  await expectSavedWidths(Number(await left.getAttribute("aria-valuenow")), Number(await right.getAttribute("aria-valuenow")));
   assert.ok((await page.locator(".reader-pane").boundingBox()).width >= 480);
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("jingreader:sidebar-widths:v1")));
   await page.setViewportSize({ width: 1080, height: 900 });
@@ -56,12 +73,12 @@ try {
   assert.ok((await page.locator(".reader-pane").boundingBox()).width >= 480);
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.waitForFunction((width) => document.querySelector('[aria-label="文件栏宽度"]').getAttribute("aria-valuenow") === String(width), saved.treeWidth);
-  assert.equal(await right.getAttribute("aria-valuenow"), String(saved.outlineWidth));
+  await expectWidth(right, String(saved.outlineWidth));
   await page.setViewportSize({ width: 760, height: 900 });
   await page.waitForFunction(() => !document.querySelector(".left-sidebar"));
   await page.getByRole("button", { name: "文件列表", exact: true }).click();
   await drag(left, -70);
-  assert.equal(await left.getAttribute("aria-valuenow"), String(saved.treeWidth - 70));
+  await expectWidth(left, String(saved.treeWidth - 70));
   assert.ok((await page.locator(".reader-pane").boundingBox()).width >= 759, "overlay resized the reading pane");
   await page.keyboard.press("Escape");
   assert.equal(await page.locator(".left-sidebar").count(), 0);
