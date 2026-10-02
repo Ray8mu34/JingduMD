@@ -706,13 +706,21 @@ struct RemoteRequestSlot;
 
 impl RemoteRequestSlot {
     fn acquire() -> Result<Self, String> {
-        let result =
-            REMOTE_IMAGE_REQUESTS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                (value < REMOTE_IMAGE_CONCURRENCY).then_some(value + 1)
-            });
-        result
-            .map(|_| Self)
-            .map_err(|_| "远程图片并发已达上限，请稍后重试".into())
+        let mut active = REMOTE_IMAGE_REQUESTS.load(Ordering::Acquire);
+        loop {
+            if active >= REMOTE_IMAGE_CONCURRENCY {
+                return Err("远程图片并发已达上限，请稍后重试".into());
+            }
+            match REMOTE_IMAGE_REQUESTS.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(Self),
+                Err(current) => active = current,
+            }
+        }
     }
 }
 
@@ -2464,6 +2472,19 @@ mod tests {
             local
         ));
     }
+    #[test]
+    fn remote_image_slots_enforce_the_limit_and_release_capacity() {
+        let mut slots: Vec<_> = (0..REMOTE_IMAGE_CONCURRENCY)
+            .map(|_| RemoteRequestSlot::acquire().unwrap())
+            .collect();
+        assert!(RemoteRequestSlot::acquire().is_err());
+        drop(slots.pop());
+        slots.push(RemoteRequestSlot::acquire().unwrap());
+        assert!(RemoteRequestSlot::acquire().is_err());
+        drop(slots);
+        assert_eq!(REMOTE_IMAGE_REQUESTS.load(Ordering::Acquire), 0);
+    }
+
     #[test]
     fn remote_images_reject_private_networks_and_credentials() {
         assert!(validate_remote_image_url("http://127.0.0.1/private.png").is_err());
