@@ -117,7 +117,7 @@ function LocalImage({ documentPath, source, alt, remotePolicy, allowedRemoteHost
     if (/^data:/i.test(source)) { setUrl(source); return; }
     let objectUrl = "";
     const command = isRemote ? "read_remote_image" : "read_asset";
-    const args = isRemote ? { url: source } : { path: resolveLocalPath(documentPath, source) };
+    const args = isRemote ? { url: source } : { documentPath, path: resolveLocalPath(documentPath, source) };
     if (isRemote && !remoteAllowed) return;
     invoke<AssetPayload>(command, args)
       .then((payload) => {

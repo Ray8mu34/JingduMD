@@ -229,6 +229,66 @@ mod tests {
     }
 
     #[test]
+    fn local_images_outside_the_root_keep_document_and_type_guards() {
+        let files = Files::new();
+        let registry = registry();
+        let state = WindowState(registry.create("main/tab-images", None));
+        let document = to_string(&files.0.join("a/child/paper.md"));
+        let image = files.0.join("b/共享 图片.PNG");
+        let bytes = b"\x89PNG\r\n\x1a\nimage";
+        fs::write(&image, bytes).unwrap();
+        let image_path = to_string(&image);
+        assert!(read_asset(state.clone(), document.clone(), image_path.clone()).is_err());
+
+        // Opening only the Markdown file sets its containing folder as the root.
+        open_target(state.clone(), document.clone()).unwrap();
+        assert!(guarded_path(&state, &image_path).is_err());
+        let relative_image = to_string(&files.0.join("a/child/../../b/共享 图片.PNG"));
+        let payload = read_asset(state.clone(), document.clone(), relative_image).unwrap();
+        assert_eq!(payload.mime, "image/png");
+        assert_eq!(payload.data, bytes);
+        assert!(read_asset(state.clone(), document.clone(), image_path.clone()).is_ok());
+
+        let outside_document = to_string(&files.0.join("b/paper.md"));
+        assert!(read_document(state.clone(), outside_document.clone()).is_err());
+        assert!(list_directory(state.clone(), to_string(&files.0.join("b"))).is_err());
+        assert!(read_asset(state.clone(), outside_document.clone(), image_path.clone()).is_err());
+        assert!(read_asset(state.clone(), document.clone(), outside_document).is_err());
+        assert!(read_asset(
+            state.clone(),
+            document.clone(),
+            to_string(&files.0.join("b"))
+        )
+        .is_err());
+        assert!(read_asset(
+            state.clone(),
+            document.clone(),
+            to_string(&files.0.join("missing.png"))
+        )
+        .is_err());
+
+        let own_image = files.0.join("a/child/local.svg");
+        fs::write(&own_image, "<svg xmlns=\"http://www.w3.org/2000/svg\"/>").unwrap();
+        assert!(read_asset(state.clone(), document.clone(), to_string(&own_image)).is_ok());
+        assert!(read_asset(state.clone(), to_string(&own_image), image_path.clone()).is_err());
+
+        let large_image = files.0.join("b/large.png");
+        fs::File::create(&large_image)
+            .unwrap()
+            .set_len(50 * 1024 * 1024 + 1)
+            .unwrap();
+        assert!(
+            read_asset(state.clone(), document.clone(), to_string(&large_image))
+                .unwrap_err()
+                .contains("50MB")
+        );
+        open_target(state.clone(), to_string(&files.0.join("b"))).unwrap();
+        assert!(read_asset(state.clone(), document.clone(), image_path.clone()).is_err());
+        registry.remove_window("main");
+        assert!(read_asset(state, document, image_path).is_err());
+    }
+
+    #[test]
     fn windows_and_tabs_keep_their_own_roots_permissions_and_lifetime() {
         let files = Files::new();
         let registry = registry();

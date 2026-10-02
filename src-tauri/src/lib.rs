@@ -660,8 +660,18 @@ fn read_document(state: WindowState, path: String) -> Result<DocumentPayload, St
 }
 
 #[tauri::command]
-fn read_asset(state: WindowState, path: String) -> Result<AssetPayload, String> {
-    let file = guarded_path(&state, &path)?;
+fn read_asset(
+    state: WindowState,
+    document_path: String,
+    path: String,
+) -> Result<AssetPayload, String> {
+    let document = guarded_path(&state, &document_path)?;
+    if !document.is_file() || !is_markdown(&document) {
+        return Err("目标不是 Markdown 文件".into());
+    }
+    // Images may live outside the opened folder (e.g. ../../assets/01/relations.png).
+    // Keep the document scoped to this tab, and only relax the image path boundary.
+    let file = canonical(&path)?;
     if !file.is_file() {
         return Err("资源不存在".into());
     }

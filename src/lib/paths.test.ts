@@ -8,6 +8,8 @@ describe("native local paths", () => {
     ["/文章.md", "a.svg", "/a.svg"],
     ["/Users/me/a\\b/文章.md", "a.svg", "/Users/me/a\\b/a.svg"],
     ["C:\\notes\\a.md", "../images/a.svg", "C:\\images\\a.svg"],
+    ["D:\\资料\\天文学\\course\\01-solar-system\\slides.md", "../../assets/01/relations.png", "D:\\资料\\天文学\\assets\\01\\relations.png"],
+    ["/Users/me/天文学/course/01-solar-system/slides.md", "../../assets/01/relations.png", "/Users/me/天文学/assets/01/relations.png"],
     ["C:\\notes\\a.md", "/images/a.svg", "C:\\images\\a.svg"],
     ["C:\\notes\\a.md", "D:/images/a.svg", "D:\\images\\a.svg"],
     ["\\\\server\\share\\notes\\a.md", "../a.svg", "\\\\server\\share\\a.svg"],

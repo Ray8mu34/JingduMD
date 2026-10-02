@@ -2,7 +2,9 @@ import { fireEvent, render, waitFor } from "@testing-library/react";
 import MarkdownReader, { isLongDocument, mermaidViewBoxWidth, sanitizeMermaidSvg } from "./MarkdownReader";
 import type { DocumentPayload } from "../types";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import { imageSizeKey, readImageWidth } from "../lib/imageSizing";
+import { TabContext } from "../lib/tabContext";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(() => Promise.resolve()) }));
 vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -14,6 +16,21 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 describe("MarkdownReader mathematics", () => {
+  it("loads an image two directories above the document using its tab and document context", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ mime: "image/png", data: [137, 80, 78, 71, 13, 10, 26, 10] });
+    const document: DocumentPayload = {
+      path: "D:\\资料\\天文学\\course\\01-solar-system\\slides.md", name: "slides.md", modifiedMs: 0, size: 0,
+      content: "![太阳、地球与月球](../../assets/01/relations.png){height=3.8in}"
+    };
+    const { findByAltText } = render(<TabContext.Provider value="tab-images">
+      <MarkdownReader document={document} night={false} onOpenDocument={() => {}} />
+    </TabContext.Provider>);
+    expect(await findByAltText("太阳、地球与月球")).toHaveAttribute("src", "blob:jingreader-test");
+    expect(invoke).toHaveBeenCalledWith("read_asset", {
+      documentPath: document.path, path: "D:\\资料\\天文学\\assets\\01\\relations.png", tabId: "tab-images"
+    }, undefined);
+  });
+
   it("renders fenced math as a display equation without a code toolbar", () => {
     const document: DocumentPayload = { path: "math.md", name: "math.md", modifiedMs: 0, size: 0, content: "```math\nx^2 + y^2 = 1\n```\n\nInline $x$." };
     const { container } = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
