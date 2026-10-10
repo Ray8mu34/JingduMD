@@ -5,6 +5,7 @@ import App, { type ReaderSession } from "./App";
 import { TabContext } from "./lib/tabContext";
 import { isMac, primaryModifier, shortcutLabel } from "./lib/platform";
 import { useNativeMenu } from "./lib/nativeMenu";
+import FileContextMenu, { type FileMenuTarget } from "./components/FileContextMenu";
 
 type Tab = { id: string; session?: ReaderSession; initialPath?: string };
 const title = (tab: Tab) => (tab.session?.path || tab.initialPath || tab.session?.root)?.split(/[\\/]/).pop() || "新标签页";
@@ -13,6 +14,7 @@ export default function ReaderWorkspace() {
   const [tabs, setTabs] = useState<Tab[]>([{ id: "primary" }]);
   const [active, setActive] = useState("primary");
   const [error, setError] = useState("");
+  const [menu, setMenu] = useState<(FileMenuTarget & { tabId: string }) | null>(null);
   const latest = useRef(tabs);
   latest.current = tabs;
   const report = useCallback((id: string, session: ReaderSession) => {
@@ -67,8 +69,18 @@ export default function ReaderWorkspace() {
   const tab = tabs.find((item) => item.id === active)!;
   const bar = <div className="document-tabs">
     <div role="tablist" aria-label="文档标签页" className="document-tab-list">
-      {tabs.map((item) => <div key={item.id} className={`document-tab ${item.id === active ? "active" : ""}`}>
+      {tabs.map((item) => <div key={item.id} className={`document-tab ${item.id === active ? "active" : ""}`} onContextMenu={(event) => {
+        const path = item.session?.path || item.initialPath;
+        if (!path) return;
+        event.preventDefault();
+        setMenu({ path, tabId: item.id, x: event.clientX, y: event.clientY, trigger: event.currentTarget.querySelector<HTMLElement>('[role="tab"]')! });
+      }}>
         <button role="tab" id={`tab-${item.id}`} aria-controls="reader-tab-panel" aria-selected={item.id === active} tabIndex={item.id === active ? 0 : -1} title={item.session?.path || item.initialPath || title(item)} onClick={() => setActive(item.id)} onAuxClick={(event) => { if (event.button === 1) closeTab(item.id); }} onKeyDown={(event) => {
+          const path = item.session?.path || item.initialPath;
+          if (path && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+            event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect();
+            setMenu({ path, tabId: item.id, x: rect.left, y: rect.bottom, trigger: event.currentTarget }); return;
+          }
           if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
           event.preventDefault();
           const index = tabs.findIndex((tab) => tab.id === item.id);
@@ -82,6 +94,10 @@ export default function ReaderWorkspace() {
     <button className="tab-action" title={shortcutLabel("新建标签页 (Ctrl+T)")} aria-label="新建标签页" onClick={() => newTab()}><Plus /></button>
     <button className="tab-action" title="在新窗口打开当前文章" aria-label="在新窗口打开当前标签页" disabled={!tab.session?.path} onClick={() => void invoke("open_in_new_window", { path: tab.session?.path }).catch((error) => setError(String(error)))}><ExternalLink /></button>
     {error && <button className="tab-error" onClick={() => setError("")}>{error}</button>}
+    {menu && <FileContextMenu target={menu} onClose={() => setMenu(null)} actions={[
+      { label: "在新窗口打开", icon: <ExternalLink />, run: () => invoke("open_in_new_window", { path: menu.path }) },
+      { label: "关闭标签页", icon: <X />, run: () => closeTab(menu.tabId) }
+    ]} />}
   </div>;
   return <TabContext.Provider value={active}>
     <App key={active} session={tab.session} initialPath={tab.initialPath} onSessionChange={(session) => report(active, session)} onNewTab={newTab} tabBar={bar} tabId={active} />

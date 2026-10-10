@@ -26,6 +26,7 @@ use url::Url;
 use walkdir::WalkDir;
 use windows::{create_reader_window, open_external_target, WindowRegistry, WindowState};
 mod annotations;
+mod file_highlights;
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -2346,6 +2347,9 @@ pub fn run() {
             close_tab,
             list_directory,
             read_document,
+            file_highlights::write_file_highlights,
+            file_highlights::highlight_migration_files,
+            file_highlights::begin_file_highlight_migration,
             read_asset,
             read_remote_image,
             index_root,

@@ -1,6 +1,24 @@
 import { captureTextAnchor, restoreTextAnchor } from "./readingAnchor";
 
 describe("reading text anchor", () => {
+  it("keeps a prose caret when preceding inline math replaces its text", () => {
+    const container = document.createElement("div");
+    container.innerHTML = '<article class="markdown-body"><p>Before <span class="lazy-math">x</span> keep reading here</p></article>';
+    document.body.append(container);
+    const node = container.querySelector("p")!.lastChild as Text;
+    const range = document.createRange();
+    range.getBoundingClientRect = () => ({ top: 210, height: 20, width: 0 } as DOMRect);
+    const start = vi.spyOn(range, "setStart");
+    const create = vi.spyOn(document, "createRange").mockReturnValue(range);
+    container.getBoundingClientRect = () => ({ top: 0 } as DOMRect);
+    try {
+      container.querySelector(".lazy-math")!.innerHTML = "<span>xx</span><span>xx</span>";
+      restoreTextAnchor(container, { blockIndex: 0, text: "Before x keep reading here", textOffset: 13,
+        context: "Before x keep reading here", viewportTop: 180, node, nodeOffset: 5 });
+      expect(start).toHaveBeenCalledWith(node, 5);
+      expect(container.scrollTop).toBe(30);
+    } finally { create.mockRestore(); container.remove(); }
+  });
   it("keeps the original offset when a paragraph repeats the same phrase", () => {
     const container = document.createElement("div");
     const text = "重复句子用于验证阅读位置。".repeat(30);

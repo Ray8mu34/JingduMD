@@ -1,4 +1,5 @@
 import type { HighlightColor, NewTextHighlight, ResolvedHighlight, TextHighlight } from "../types";
+import { sourceSelection } from "./fileHighlights";
 
 const SKIP_SELECTOR = [
   "script", "style", "noscript", ".katex-mathml", "[aria-hidden='true']", "[data-highlight-ignore]",
@@ -75,7 +76,8 @@ export function selectionToHighlight(
     startOffset,
     endOffset,
     headingId: headingForNode(root, range.startContainer),
-    color
+    color,
+    sourceRange: sourceSelection(root, selection) ?? undefined
   };
 }
 
@@ -110,6 +112,13 @@ export function rangeForOffsets(map: ArticleTextMap, start: number, end: number)
 }
 
 function resolveWithMap(root: HTMLElement, map: ArticleTextMap, highlight: TextHighlight): ResolvedHighlight {
+  if (highlight.id < 0) {
+    const spans = [...root.querySelectorAll<HTMLElement>("[data-file-highlight]")].filter((span) => span.dataset.fileHighlight?.split(" ").includes(String(highlight.id)));
+    const first = spans[0]?.firstChild, last = spans.at(-1)?.lastChild;
+    const range = first && last ? document.createRange() : null;
+    if (range) { range.setStart(first!, 0); range.setEnd(last!, last!.textContent?.length ?? 0); }
+    return { ...highlight, range, orphaned: !range };
+  }
   const candidates: number[] = [];
   let from = 0;
   while (from <= map.text.length - highlight.quote.length) {
@@ -144,7 +153,7 @@ export function paintHighlights(items: ResolvedHighlight[]): boolean {
   for (const color of COLORS) {
     const name = `jingreader-highlight-${color}`;
     registry.delete(name);
-    const ranges = items.filter((item) => item.color === color && item.range).map((item) => item.range!);
+    const ranges = items.filter((item) => item.id > 0 && item.color === color && item.range).map((item) => item.range!);
     if (ranges.length) registry.set(name, new HighlightConstructor(...ranges));
   }
   return true;

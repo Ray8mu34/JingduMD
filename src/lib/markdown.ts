@@ -176,7 +176,7 @@ export function remarkSanitizeHtml() {
       node.value = DOMPurify.sanitize(node.value, {
         USE_PROFILES: { html: true },
         FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form"],
-        FORBID_ATTR: ["style", "onerror", "onload", "onclick"]
+        FORBID_ATTR: ["style", "onerror", "onload", "onclick", "data-source-start", "data-source-end", "data-file-highlight"]
       });
     });
   };

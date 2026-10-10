@@ -1,6 +1,6 @@
 import { primaryModifier, shortcutLabel } from "../lib/platform";
 import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import FileContextMenu, { type FileMenuTarget } from "./FileContextMenu";
 import { useTabInvoke } from "../lib/tabContext";
 import { AppWindow, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, Search } from "lucide-react";
 import type { DirectoryEntry } from "../types";
@@ -12,7 +12,7 @@ function TreeNode({ entry, selected, onOpen, onOpenNew, expandedPaths }: { entry
   const [expanded, setExpanded] = useState(expandedPaths.has(entry.path));
   const [children, setChildren] = useState<DirectoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<FileMenuTarget | null>(null);
 
   async function loadChildren() {
     if (children.length || loading) return;
@@ -32,12 +32,21 @@ function TreeNode({ entry, selected, onOpen, onOpenNew, expandedPaths }: { entry
   }
 
   return <div className="tree-node">
-    <button className={`tree-row ${selected === entry.path ? "selected" : ""}`} onClick={(event) => void toggle(primaryModifier(event))} onDoubleClick={(event) => { if (entry.kind === "markdown" && primaryModifier(event)) onOpenNew(entry.path); }} onKeyDown={(event) => { if (entry.kind === "markdown" && primaryModifier(event) && event.key === "Enter") { event.preventDefault(); onOpenNew(entry.path); } }} onContextMenu={(event) => { if (entry.kind !== "markdown") return; event.preventDefault(); setMenu({ x: Math.min(event.clientX, window.innerWidth - 190), y: Math.min(event.clientY, window.innerHeight - 90) }); }} title={entry.kind === "markdown" ? `${entry.path}\n${shortcutLabel("Ctrl+双击或 Ctrl+Enter：在新窗口打开")}` : entry.path}>
+    <button className={`tree-row ${selected === entry.path ? "selected" : ""}`} onClick={(event) => void toggle(primaryModifier(event))} onDoubleClick={(event) => { if (entry.kind === "markdown" && primaryModifier(event)) onOpenNew(entry.path); }} onKeyDown={(event) => {
+      if (entry.kind !== "markdown") return;
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+        event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect();
+        setMenu({ path: entry.path, x: rect.left + 16, y: rect.bottom, trigger: event.currentTarget });
+      } else if (primaryModifier(event) && event.key === "Enter") { event.preventDefault(); onOpenNew(entry.path); }
+    }} onContextMenu={(event) => { if (entry.kind !== "markdown") return; event.preventDefault(); setMenu({ path: entry.path, x: event.clientX, y: event.clientY, trigger: event.currentTarget }); }} title={entry.kind === "markdown" ? `${entry.path}\n${shortcutLabel("Ctrl+双击或 Ctrl+Enter：在新窗口打开")}` : entry.path}>
       <span className="tree-chevron">{entry.kind === "directory" ? (expanded ? <ChevronDown /> : <ChevronRight />) : null}</span>
       {entry.kind === "directory" ? (expanded ? <FolderOpen /> : <Folder />) : <FileText />}
       <span>{entry.name}</span>
     </button>
-    {menu && createPortal(<div className="tree-context-layer" onMouseDown={() => setMenu(null)} onContextMenu={(event) => event.preventDefault()}><div className="tree-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}><button role="menuitem" onClick={() => { onOpen(entry.path); setMenu(null); }}><FileText />在当前窗口打开</button><button role="menuitem" onClick={() => { onOpenNew(entry.path); setMenu(null); }}><AppWindow />在新窗口打开</button></div></div>, document.querySelector(".app") ?? document.body)}
+    {menu && <FileContextMenu target={menu} onClose={() => setMenu(null)} actions={[
+      { label: "在当前窗口打开", icon: <FileText />, run: () => onOpen(entry.path) },
+      { label: "在新窗口打开", icon: <AppWindow />, run: () => onOpenNew(entry.path) }
+    ]} />}
     {expanded && <div className="tree-children">
       {loading && <div className="tree-loading">读取中…</div>}
       {children.map((child) => <TreeNode key={child.path} entry={child} selected={selected} onOpen={onOpen} onOpenNew={onOpenNew} expandedPaths={expandedPaths} />)}

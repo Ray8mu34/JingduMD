@@ -16,6 +16,7 @@
     "core:window:allow-start-dragging",
     "core:webview:allow-print",
     "dialog:allow-open",
-    "opener:allow-open-url"
+    "opener:allow-open-url",
+    "opener:allow-reveal-item-in-dir"
   ]
 }

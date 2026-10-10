@@ -16,6 +16,16 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 describe("MarkdownReader mathematics", () => {
+  it("lays out all ordinary-article formulas before viewport observation", () => {
+    const observer = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class { observe() {} disconnect() {} } as unknown as typeof IntersectionObserver;
+    try {
+      const content = "# Cold article\n\nInline $x$.\n\n" + "Paragraph.\n\n".repeat(200) + "$$\\frac{1}{2}$$";
+      const document: DocumentPayload = { path: "cold.md", name: "cold.md", modifiedMs: 0, size: content.length, content };
+      const { container } = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
+      expect(container.querySelectorAll(".lazy-math .katex")).toHaveLength(2);
+    } finally { globalThis.IntersectionObserver = observer; }
+  });
   it("loads an image two directories above the document using its tab and document context", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({ mime: "image/png", data: [137, 80, 78, 71, 13, 10, 26, 10] });
     const document: DocumentPayload = {

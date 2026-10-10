@@ -107,7 +107,7 @@ export type TextHighlight = {
   createdMs: number;
   updatedMs: number;
 };
-export type NewTextHighlight = Omit<TextHighlight, "id" | "root" | "createdMs" | "updatedMs">;
+export type NewTextHighlight = Omit<TextHighlight, "id" | "root" | "createdMs" | "updatedMs"> & { sourceRange?: { start: number; end: number }; sourceContent?: string };
 export type ResolvedHighlight = TextHighlight & { range: Range | null; orphaned: boolean };
 
 export const DEFAULT_PREFERENCES: ReaderPreferences = {

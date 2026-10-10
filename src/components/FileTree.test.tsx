@@ -18,6 +18,7 @@ describe("FileTree multi-window actions", () => {
     const row = getByText("第一章.md").closest("button")!;
     fireEvent.contextMenu(row, { clientX: 80, clientY: 90 });
     fireEvent.click(getByRole("menuitem", { name: "在新窗口打开" }));
+    await waitFor(() => expect(getByRole("button", { name: "第一章.md" })).toHaveFocus());
     expect(onOpenNew).toHaveBeenCalledWith("C:\\notes\\第一章.md");
     fireEvent.keyDown(row, { key: "Enter", ctrlKey: true });
     expect(onOpenNew).toHaveBeenCalledTimes(2);

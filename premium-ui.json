@@ -1,0 +1,11 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["src"],
+  "locale": "zh-CN",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": ["Select/Listbox", "CRUD", "Toast", "Scrollbar"],
+  "ownership": { "Select/Listbox": "native" },
+  "requiredCommands": ["unit", "build", "sourceHighlights"],
+  "commands": { "unit": "pnpm test", "build": "pnpm build", "sourceHighlights": "node scripts/qa-source-highlights.mjs" },
+  "evidence": { "crudFullFlow": "scripts/qa-source-highlights.mjs", "failurePaths": "scripts/qa-source-highlights.mjs" }
+}

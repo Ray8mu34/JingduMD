@@ -28,6 +28,7 @@ import {
 import { readerPresentation } from "./lib/readerPresentation";
 import { loadFontCatalog } from "./lib/fontCatalog";
 import { extractOutline } from "./lib/markdown";
+import { fileHighlightRecords, parseFileHighlights, serializeFileHighlights, migrateLegacyHighlights, matchingFileHighlight } from "./lib/fileHighlights";
 import { migratePreferences, resolveReadingStyle } from "./lib/readerPreferences";
 import { formatModifiedTime, readingMetrics } from "./lib/reading";
 import { captureTextAnchor, restoreTextAnchor, type TextAnchor } from "./lib/readingAnchor";
@@ -127,7 +128,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   const [rightTab, setRightTab] = useState<"outline" | "highlights">("outline");
   const [highlightPopover, setHighlightPopover] = useState<HighlightPopover | null>(null);
   const [annotationManagerOpen, setAnnotationManagerOpen] = useState(false);
-  const [deletedHighlight, setDeletedHighlight] = useState<{ id: number; path: string } | null>(null);
+  const [deletedHighlight, setDeletedHighlight] = useState<{ id: number; path: string; before?: string; after?: string } | null>(null);
   const selectionDraft = useRef<HighlightPopover | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const settingsTrigger = useRef<HTMLButtonElement>(null);
@@ -163,7 +164,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   const presentedPath = useRef<string | null>(null);
   const pendingAnchor = useRef<{ path: string; anchor: TextAnchor } | null>(null);
   const liveAnchor = useRef<{ path: string; generation: number; anchor: TextAnchor } | null>(null);
-  const outline = useMemo(() => doc ? extractOutline(doc.content) : [], [doc]);
+  const outline = useMemo(() => doc ? extractOutline(parseFileHighlights(doc.content).clean) : [], [doc]);
   const metrics = useMemo(() => doc ? readingMetrics(doc.content) : null, [doc]);
 
   const preserveAnchor = useCallback(() => {
@@ -259,14 +260,35 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     } catch (error) { notify(`无法读取高亮：${errorText(error)}`); }
   }, [notify]);
 
+  const highlightWritePending = useRef(false);
+  async function saveFileHighlights(current: DocumentPayload, content: string, migratedIds: number[] = []) {
+    if (highlightWritePending.current) throw new Error("正在保存高亮，请稍候再操作。");
+    highlightWritePending.current = true;
+    try {
+      const result = await invoke<{ content: string; backupPath: string }>("write_file_highlights", {
+        path: current.path, expected: current.content, content, migratedIds,
+        migratedRecords: highlights.filter((h) => migratedIds.includes(h.id))
+      });
+      if (documentRef.current?.path === current.path) {
+        preserveAnchor();
+        const updated = { ...current, content: result.content, modifiedMs: Date.now() };
+        documentRef.current = updated;
+        setDoc(updated);
+      }
+      return result;
+    } finally { highlightWritePending.current = false; }
+  }
+
   const createHighlight = useCallback(async (draft: NewTextHighlight, color: HighlightColor) => {
     try {
-      const selection = globalThis.getSelection();
-      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-      const existing = range && resolvedHighlights.find((item) => item.range?.toString() === draft.quote &&
-        item.range.compareBoundaryPoints(Range.START_TO_START, range) === 0);
-      if (existing) await invoke("update_text_highlight_color", { id: existing.id, color });
-      else await invoke<TextHighlight>("create_text_highlight", { highlight: { ...draft, color } });
+      const current = documentRef.current;
+      if (!current || current.path !== draft.path || !draft.sourceRange) throw new Error("这个选区包含公式、代码或无法对应原文的内容，请只选择正文文字。");
+      if (draft.sourceContent !== current.content) throw new Error("文章已变化，请重新选择文字。");
+      const { clean, ranges } = parseFileHighlights(current.content);
+      const existing = matchingFileHighlight(clean, ranges, draft.sourceRange);
+      if (existing) existing.color = color;
+      else ranges.push({ id: -Date.now(), ...draft.sourceRange, color });
+      await saveFileHighlights(current, serializeFileHighlights(clean, ranges));
       globalThis.getSelection()?.removeAllRanges();
       selectionDraft.current = null;
       setHighlightPopover(null);
@@ -276,17 +298,41 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
 
   const changeHighlightColor = useCallback(async (id: number, color: HighlightColor, path: string) => {
     try {
-      await invoke("update_text_highlight_color", { id, color });
+      if (id < 0) {
+        const current = documentRef.current;
+        if (!current || current.path !== path) throw new Error("请重新打开文章后再改色。");
+        const { clean, ranges } = parseFileHighlights(current.content);
+        const range = ranges.find((r) => r.id === id);
+        if (!range) throw new Error("高亮已变化，请重新选择。");
+        range.color = color;
+        await saveFileHighlights(current, serializeFileHighlights(clean, ranges));
+      } else {
+        // Editing a legacy mark writes it to the source immediately.
+        const current = documentRef.current;
+        const record = highlights.find((r) => r.id === id);
+        if (!current || current.path !== path || !record) throw new Error("请重新打开文章后再改色。");
+        const migration = migrateLegacyHighlights(current.content, [{ ...record, color }]);
+        if (migration.skippedIds.length) throw new Error("无法准确定位旧高亮，请先关联原文。");
+        await saveFileHighlights(current, migration.content, migration.migratedIds);
+      }
       setHighlightPopover(null);
       await refreshHighlights(documentRef.current?.path ?? path);
     } catch (error) { notify(`无法修改高亮：${errorText(error)}`); }
-  }, [notify, refreshHighlights]);
+  }, [notify, refreshHighlights, highlights]);
 
   const deleteHighlight = useCallback(async (id: number, path: string) => {
     try {
-      await invoke("delete_text_highlight", { id });
+      const current = documentRef.current;
+      let before: string | undefined, after: string | undefined;
+      if (id < 0) {
+        if (!current || current.path !== path) throw new Error("请重新打开文章后再删除。");
+        const { clean, ranges } = parseFileHighlights(current.content);
+        before = current.content;
+        after = serializeFileHighlights(clean, ranges.filter((r) => r.id !== id));
+        await saveFileHighlights(current, after);
+      } else await invoke("delete_text_highlight", { id });
       setHighlightPopover(null);
-      setDeletedHighlight({ id, path });
+      setDeletedHighlight({ id, path, before, after });
       await refreshHighlights(documentRef.current?.path ?? path);
     } catch (error) { notify(`无法删除高亮：${errorText(error)}`); }
   }, [notify, refreshHighlights]);
@@ -294,7 +340,11 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   const undoHighlightDelete = async () => {
     if (!deletedHighlight) return;
     try {
-      await invoke("restore_highlight", { id: deletedHighlight.id });
+      if (deletedHighlight.before !== undefined) {
+        const current = await invoke<DocumentPayload>("read_document", { path: deletedHighlight.path });
+        if (current.content !== deletedHighlight.after) throw new Error("删除后文章已变化，无法直接撤销。原文仍保存在高亮备份中。");
+        await saveFileHighlights(current, deletedHighlight.before);
+      } else await invoke("restore_highlight", { id: deletedHighlight.id });
       setDeletedHighlight(null);
       await refreshHighlights(documentRef.current?.path);
     } catch (error) { notify(`无法恢复高亮：${errorText(error)}`); }
@@ -612,7 +662,8 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
       frame = 0;
       if (cancelled) return;
       const article = scrollRef.current?.querySelector<HTMLElement>(".markdown-body");
-      const resolved = article ? resolveHighlights(article, highlights) : [];
+      const native = doc ? fileHighlightRecords(doc.content, doc.path, rootRef.current ?? "") : [];
+      const resolved = article ? resolveHighlights(article, [...highlights, ...native]) : [];
       setResolvedHighlights(resolved);
       paintHighlights(resolved);
       const pending = pendingHighlightId.current;
@@ -810,6 +861,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     if (!article || !selection || selection.isCollapsed) { selectionDraft.current = null; return; }
     const draft = selectionToHighlight(article, selection, doc.path, "yellow");
     if (!draft) { selectionDraft.current = null; return; }
+    draft.sourceContent = doc.content;
     const rect = selection.getRangeAt(0).getBoundingClientRect();
     const popover = {
       x: Math.max(116, Math.min(window.innerWidth - 116, rect.left + rect.width / 2)),
@@ -950,7 +1002,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
           : <div className="highlights-panel">
             <button className="annotation-manage-button" onClick={() => { setHighlightPopover(null); setAnnotationManagerOpen(true); }}><Highlighter />找回、备份与回收站</button>
             <div className="highlight-section-title"><span>当前文档</span><small>{resolvedHighlights.filter((item) => !item.orphaned).length}/{resolvedHighlights.length}</small></div>
-            {!resolvedHighlights.length && <p className="highlight-empty">选中正文后即可添加高亮。记录只保存在应用数据库中。</p>}
+            {!resolvedHighlights.length && <p className="highlight-empty">选中正文后即可添加高亮。标记随 Markdown 文件保存。</p>}
             {resolvedHighlights.map((item) => <div key={item.id} className={`highlight-card color-${item.color} ${item.orphaned ? "orphaned" : ""}`}>
               <button className="highlight-quote" onClick={() => navigateToStoredHighlight(item)} title={item.orphaned ? "原文变化后已无法定位" : "跳转到高亮"}><span>{item.quote}</span>{item.orphaned && <small>待恢复</small>}</button>
               <div className="highlight-card-actions">{HIGHLIGHT_COLORS.map((color) => <button key={color} className={`highlight-color color-${color} ${item.color === color ? "active" : ""}`} title={`改为${HIGHLIGHT_COLOR_LABELS[color]}`} aria-label={`改为${HIGHLIGHT_COLOR_LABELS[color]}`} onClick={() => void changeHighlightColor(item.id, color, item.path)} />)}<button className="highlight-delete" title="删除高亮" aria-label="删除高亮" onClick={() => void deleteHighlight(item.id, item.path)}><Trash2 /></button></div>
@@ -973,7 +1025,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
       onColor={(color) => { if (highlightPopover.highlight) void changeHighlightColor(highlightPopover.highlight.id, color, highlightPopover.highlight.path); else void createHighlight(highlightPopover.draft, color); }}
       onDelete={highlightPopover.highlight ? () => void deleteHighlight(highlightPopover.highlight!.id, highlightPopover.highlight!.path) : undefined}
       onClose={() => setHighlightPopover(null)} />}
-    {deletedHighlight && <div className="annotation-undo" role="status"><span>高亮已移入回收站</span><button onClick={() => void undoHighlightDelete()}>撤销删除</button><button aria-label="关闭撤销提示" onClick={() => setDeletedHighlight(null)}><X /></button></div>}
+    {deletedHighlight && <div className="annotation-undo" role="status"><span>{deletedHighlight.before !== undefined ? "高亮已移除，原文已备份" : "高亮已移入回收站"}</span><button onClick={() => void undoHighlightDelete()}>撤销删除</button><button aria-label="关闭撤销提示" onClick={() => setDeletedHighlight(null)}><X /></button></div>}
     {message && <div className="toast">{message}</div>}
   </div>;
 }

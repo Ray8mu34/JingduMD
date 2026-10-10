@@ -9,6 +9,7 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { PluggableList } from "unified";
 import DOMPurify from "dompurify";
+import katex from "katex";
 import { useTabInvoke } from "../lib/tabContext";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronDown, ChevronRight, Code2, Image as ImageIcon, Maximize2, SlidersHorizontal } from "lucide-react";
@@ -17,7 +18,8 @@ import { isExternalUrl, resolveLocalPath } from "../lib/paths";
 import { holdImageResizeScroll } from "../lib/imageResizeScroll";
 import { imageSizeKey, readImageWidth, saveImageWidth } from "../lib/imageSizing";
 import { useOutsideDismiss } from "../lib/useOutsideDismiss";
-import { normalizeTexDelimiters, remarkCallouts, remarkHeadingIds, remarkSanitizeHtml, remarkWikiLinks, splitFrontmatter } from "../lib/markdown";
+import { remarkCallouts, remarkHeadingIds, remarkSanitizeHtml, remarkWikiLinks } from "../lib/markdown";
+import { prepareFileHighlights } from "../lib/fileHighlights";
 
 const markdownSanitizeSchema = {
   ...defaultSchema,
@@ -25,25 +27,26 @@ const markdownSanitizeSchema = {
     ...defaultSchema.attributes,
     code: [["className", /^language-./, "math-inline", "math-display"]],
     blockquote: [["dataCallout", /^(note|tip|important|warning|caution|info|example|quote)$/]],
-    a: [...(defaultSchema.attributes?.a ?? []), "id"]
+    a: [...(defaultSchema.attributes?.a ?? []), "id"],
+    span: [...(defaultSchema.attributes?.span ?? []), "dataSourceStart", "dataSourceEnd", "dataFileHighlight", ["className", /^file-highlight-/]]
   }
 };
 const ReaderNightContext = createContext(false);
 const markdownPlugins = [remarkGfm, remarkMath, remarkFrontmatter, remarkWikiLinks, remarkCallouts, remarkHeadingIds, remarkSanitizeHtml];
 const htmlPlugins: PluggableList = [rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]];
 
-function useVisible<T extends HTMLElement>(rootMargin = "500px") {
+function useVisible<T extends HTMLElement>(rootMargin = "500px", eager = false) {
   const ref = useRef<T>(null);
-  const [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(eager);
   useEffect(() => {
     const target = ref.current;
-    if (!target) return;
+    if (!target || eager) return;
     const observer = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) { setVisible(true); observer.disconnect(); }
     }, { rootMargin });
     observer.observe(target);
     return () => observer.disconnect();
-  }, []);
+  }, [eager, rootMargin]);
   useEffect(() => {
     const reveal = () => setVisible(true);
     window.addEventListener("jingreader:expand-for-print", reveal);
@@ -315,15 +318,13 @@ function LazyCode({ language, value, loadMargin }: { language: string; value: st
   return <code ref={ref} className={`hljs language-${language}`} {...(html ? { dangerouslySetInnerHTML: { __html: html } } : {})}>{html ? undefined : value}</code>;
 }
 
-function LazyMath({ source, display, loadMargin }: { source: string; display: boolean; loadMargin: string }) {
-  const { ref, visible } = useVisible<HTMLElement>(loadMargin);
-  const [html, setHtml] = useState("");
-  useEffect(() => {
-    if (!visible) return;
-    import("katex").then(({ default: katex }) => {
-      setHtml(katex.renderToString(source, { displayMode: display, throwOnError: false, strict: "warn", trust: false }));
-    });
-  }, [display, source, visible]);
+function LazyMath({ source, display, loadMargin, eager }: { source: string; display: boolean; loadMargin: string; eager: boolean }) {
+  const { ref, visible } = useVisible<HTMLElement>(loadMargin, eager);
+  // Ordinary articles need final formula geometry on their first layout. Swapping
+  // TeX for KaTeX while reading changes both line wrapping and anchor text offsets.
+  const html = useMemo(() => eager || visible
+    ? katex.renderToString(source, { displayMode: display, throwOnError: false, strict: "warn", trust: false })
+    : "", [display, eager, source, visible]);
   return <span ref={ref} className={display ? `lazy-math math-display ${source.length > 90 ? "is-wide" : ""}` : "lazy-math math-inline"}
     {...(display ? { role: "region", "aria-label": "数学公式，可横向滚动", tabIndex: 0 } : {})}
     {...(html ? { dangerouslySetInnerHTML: { __html: html } } : {})}>{html ? undefined : source}</span>;
@@ -402,8 +403,7 @@ export default function MarkdownReader({
   const renderTier = useMemo(() => documentRenderTier(doc.content), [doc.content]);
   const loadMargin = renderTier === "extreme" ? "80px" : "500px";
   const parsed = useMemo(() => {
-    const result = splitFrontmatter(doc.content);
-    return { ...result, body: normalizeTexDelimiters(result.body) };
+    return prepareFileHighlights(doc.content);
   }, [doc.content]);
   const components = useMemo<Components>(() => ({
     pre: ({ children }) => <MarkdownPre>{children}</MarkdownPre>,
@@ -437,18 +437,18 @@ export default function MarkdownReader({
     code: ({ className, children }) => {
       const language = /language-([^\s]+)/.exec(className ?? "")?.[1] ?? "";
       const value = String(children).replace(/\n$/, "");
-      if (language === "math") return <LazyMath source={value} display={!(className ?? "").includes("math-inline")} loadMargin={loadMargin} />;
+      if (language === "math") return <LazyMath source={value} display={!(className ?? "").includes("math-inline")} loadMargin={loadMargin} eager={renderTier === "normal"} />;
       if (language === "mermaid") return <MermaidBlock source={value} loadMargin={loadMargin} />;
       if (!className) return <code>{children}</code>;
       return <LazyCode language={language} value={value} loadMargin={loadMargin} />;
     }
-  }), [allowedRemoteHosts, doc.path, loadMargin, onAllowRemoteHost, onOpenDocument, remoteImagePolicy]);
+  }), [allowedRemoteHosts, doc.path, loadMargin, onAllowRemoteHost, onOpenDocument, remoteImagePolicy, renderTier]);
 
   const markdown = useMemo(() => <ReactMarkdown
-    remarkPlugins={markdownPlugins}
+    remarkPlugins={[...markdownPlugins, parsed.plugin]}
     rehypePlugins={htmlPlugins}
     components={components}
-  >{parsed.body}</ReactMarkdown>, [components, parsed.body]);
+  >{parsed.body}</ReactMarkdown>, [components, parsed]);
 
   return <ReaderNightContext.Provider value={night}><article className={`markdown-body ${renderTier !== "normal" ? "long-document" : ""} ${renderTier === "extreme" ? "extreme-document" : ""}`} data-render-tier={renderTier} data-document-path={doc.path}>
     {showFrontmatter && parsed.frontmatter.length > 0 && <details className="frontmatter"><summary>文档属性</summary>{parsed.frontmatter.map((line, index) => <div key={index}>{line}</div>)}</details>}

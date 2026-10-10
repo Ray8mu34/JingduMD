@@ -4,7 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Download, Upload, Search, X, FolderOpen, Trash2, RotateCcw } from "lucide-react";
 import { trapTab } from "../lib/focus";
-import type { TextHighlight } from "../types";
+import type { DocumentPayload, TextHighlight } from "../types";
+import { migrateLegacyHighlights } from "../lib/fileHighlights";
 
 type Entry = { id: string; path: string; missing: boolean; hasFingerprint: boolean; active: number; deleted: number; preview: string };
 export type RecoveryReport = { recovered: number; pending: number; skippedFiles: number };
@@ -62,6 +63,28 @@ export default function AnnotationManager({ root, onClose, onChooseFolder }: {
     const result = await invoke<RecoveryReport>("recover_highlights");
     setStatus(`已找回 ${result.recovered} 篇文档的标注，${result.pending} 篇待关联。${result.skippedFiles ? ` ${result.skippedFiles} 个文件无法读取或过大，已跳过。` : ""}`);
   }
+  async function migrate() {
+    const paths = await invoke<string[]>("highlight_migration_files");
+    if (!paths.length) { setStatus("当前目录没有需要迁移的旧高亮。"); return; }
+    const migrationBackup = await invoke<string>("begin_file_highlight_migration");
+    let migrated = 0, skipped = 0;
+    const failures: string[] = [];
+    let backupPath = "";
+    for (const path of paths) {
+      try {
+        const doc = await invoke<DocumentPayload>("read_document", { path });
+        const records = await invoke<TextHighlight[]>("list_document_highlights", { path });
+        const result = migrateLegacyHighlights(doc.content, records);
+        skipped += result.skippedIds.length;
+        if (result.migratedIds.length) {
+          const saved = await invoke<{ backupPath: string }>("write_file_highlights", { path, expected: doc.content, content: result.content, migratedIds: result.migratedIds, migrationBackup, migratedRecords: records.filter((h) => result.migratedIds.includes(h.id)) });
+          backupPath = saved.backupPath;
+          migrated += result.migratedIds.length;
+        }
+      } catch (error) { failures.push(`${filename(path)}：${String(error)}`); }
+    }
+    setStatus(`已迁移 ${migrated} 条高亮；${skipped} 条无法准确定位，仍保留在数据库。${failures.length ? ` ${failures.length} 篇失败：${failures.join("；")}` : ""} 数据库备份：${migrationBackup}。${backupPath ? ` 原文备份目录：${backupPath.replace(/[\\/][^\\/]+$/, "")}` : ""}`);
+  }
   async function manage(action: string) {
     await invoke("manage_annotation_document", { documentId: selected, action });
     setPurgeConfirm(false);
@@ -73,10 +96,11 @@ export default function AnnotationManager({ root, onClose, onChooseFolder }: {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!busy) onClose(); }
     }}>
       <div className="settings-title"><h2>标注管理与备份</h2><button ref={closeRef} disabled={busy} aria-label="关闭标注管理" onClick={onClose}><X /></button></div>
-      <p className="annotation-help">标注保存在静读中，不会改写 Markdown。搬家后打开新文件夹，内容相同且匹配唯一的文档会自动找回；其余记录可以手动关联。</p>
+      <p className="annotation-help">新高亮直接保存在 Markdown 中，随文件一起携带。这里管理旧数据库标注：迁移前自动备份原文和数据库，成功的旧记录进入回收站；无法定位的记录继续保留。文件内高亮可在文章右侧“高亮”面板管理。</p>
       <div className="annotation-tools">
         <button disabled={busy} onClick={onChooseFolder}><FolderOpen />打开文件夹</button>
         <button disabled={busy || !root} onClick={() => void run(scan)}><Search />扫描找回</button>
+        <button disabled={busy || !root} onClick={() => void run(migrate)}><Upload />迁移当前目录旧高亮</button>
         <button disabled={busy} onClick={() => void run(async () => { const path = await invoke<string | null>("export_annotations"); if (path) setStatus(`备份已保存：${path}`); })}><Download />导出备份</button>
         <button disabled={busy} onClick={() => void run(async () => {
           const count = await invoke<number | null>("import_annotations");
@@ -85,12 +109,12 @@ export default function AnnotationManager({ root, onClose, onChooseFolder }: {
       </div>
       <div className="annotation-root" title={root}>{root ? `扫描范围：${root}` : "尚未打开文件夹。你仍可以查看旧标注、导入和导出备份。"}</div>
       <div className="sidebar-tabs annotation-tabs" role="tablist" aria-label="标注分类">
-        {([["all", "全部标注"], ["missing", "待关联"], ["trash", "回收站"]] as const).map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? "active" : ""} disabled={busy} onClick={() => setTab(value)}>{label} <span>{entries.reduce((sum, item) => sum + (value === "trash" ? item.deleted : value === "missing" ? (item.missing ? item.active : 0) : item.active), 0)}</span></button>)}
+        {([["all", "旧标注"], ["missing", "待关联"], ["trash", "回收站"]] as const).map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? "active" : ""} disabled={busy} onClick={() => setTab(value)}>{label} <span>{entries.reduce((sum, item) => sum + (value === "trash" ? item.deleted : value === "missing" ? (item.missing ? item.active : 0) : item.active), 0)}</span></button>)}
       </div>
       <div className="annotation-content">
         <nav className="annotation-documents" aria-label="有标注的文档">{visible.map((item) => <button key={item.id} disabled={busy} className={selected === item.id ? "active" : ""} aria-current={selected === item.id ? "true" : undefined} onClick={() => setSelected(item.id)}>
           <strong>{filename(item.path)}</strong><small>{item.missing ? "待关联 · " : ""}{tab === "trash" ? item.deleted : item.active} 条</small><span>{item.preview}</span>
-        </button>)}{!visible.length && <p className="annotation-empty">{tab === "trash" ? "回收站为空。删除的高亮会先保留在这里。" : tab === "missing" ? "没有待关联的标注。" : "还没有高亮。选中正文后选择颜色，就能保存第一条。"}</p>}</nav>
+        </button>)}{!visible.length && <p className="annotation-empty">{tab === "trash" ? "旧标注回收站为空。" : tab === "missing" ? "没有待关联的旧标注。" : "没有未迁移的旧标注。文件内高亮请在文章右侧查看。"}</p>}</nav>
         <div className="annotation-detail">{entry && visible.some((item) => item.id === entry.id) ? <>
           <h3>{filename(entry.path)}</h3><p className="annotation-path">{entry.path}</p>
           {entry.missing && <p className="annotation-help">{entry.hasFingerprint ? "尚未找到唯一匹配。可扫描当前文件夹，或手动指定对应文章。" : "旧记录没有内容指纹，无法自动判断新位置。摘录还在，请选择它对应的文章。"}</p>}
@@ -106,7 +130,7 @@ export default function AnnotationManager({ root, onClose, onChooseFolder }: {
           <div className="annotation-quotes">{highlights.map((item) => <div key={item.id} className={`highlight-card color-${item.color}`}><p>{item.quote}</p>{tab === "trash" && <button disabled={busy} onClick={() => void run(async () => { await invoke("restore_highlight", { id: item.id }); setStatus("已恢复这条高亮。"); })}>恢复这一条</button>}</div>)}</div>
         </> : <p className="annotation-empty">摘录和颜色会保留在这里。导出备份后，换电脑也能导入找回。</p>}</div>
       </div>
-      <div className="annotation-status" role="status">{busy ? "正在处理，请稍候…" : status || "备份包含全部文档的标注和回收站。不会打包 Markdown 原文，请另行保存原文件。"}</div>
+      <div className="annotation-status" role="status">{busy ? "正在处理，请稍候…" : status || "导出备份包含旧数据库标注和回收站。文件内高亮随 Markdown 保存；每次修改前的原文另存于应用数据目录 highlight-backups。"}</div>
     </section>
   </div>;
 }

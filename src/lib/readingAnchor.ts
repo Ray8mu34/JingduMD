@@ -1,4 +1,9 @@
-export type TextAnchor = { blockIndex: number; text: string; textOffset: number; context: string; viewportTop: number };
+export type TextAnchor = {
+  blockIndex: number; text: string; textOffset: number; context: string; viewportTop: number;
+  // These references are local to the current render. Keep prose anchored to its
+  // own text node when asynchronous formulas change the surrounding textContent.
+  node?: Text; nodeOffset?: number;
+};
 
 const blockSelector = "p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,table,.math-display,.image-frame";
 
@@ -14,6 +19,8 @@ export function captureTextAnchor(container: HTMLElement): TextAnchor | null {
   const block = blocks[blockIndex];
   const x = Math.min(viewport.right - 20, Math.max(viewport.left + 20, article.getBoundingClientRect().left + 50));
   const caret = document.caretRangeFromPoint?.(x, Math.min(targetY, block.getBoundingClientRect().bottom - 2));
+  let node: Text | undefined;
+  let nodeOffset: number | undefined;
   let textOffset = 0;
   let viewportTop = block.getBoundingClientRect().top - viewport.top;
   if (caret && block.contains(caret.startContainer)) {
@@ -22,15 +29,30 @@ export function captureTextAnchor(container: HTMLElement): TextAnchor | null {
     before.setEnd(caret.startContainer, caret.startOffset);
     textOffset = before.toString().length;
     viewportTop = caret.getBoundingClientRect().top - viewport.top;
+    if (caret.startContainer.nodeType === Node.TEXT_NODE && !(caret.startContainer.parentElement?.closest(".lazy-math, .hljs"))) {
+      node = caret.startContainer as Text;
+      nodeOffset = caret.startOffset;
+    }
   }
   const text = block.textContent ?? "";
   return { blockIndex, text: text.slice(0, 120), textOffset,
-    context: text.slice(Math.max(0, textOffset - 20), textOffset + 20), viewportTop };
+    context: text.slice(Math.max(0, textOffset - 20), textOffset + 20), viewportTop, node, nodeOffset };
 }
 
 export function restoreTextAnchor(container: HTMLElement, anchor: TextAnchor): boolean {
   const article = container.querySelector<HTMLElement>(".markdown-body");
   if (!article) return false;
+  if (anchor.node?.isConnected && article.contains(anchor.node) && anchor.nodeOffset !== undefined) {
+    const range = document.createRange();
+    range.setStart(anchor.node, Math.min(anchor.node.length, anchor.nodeOffset));
+    range.collapse(true);
+    const rect = range.getBoundingClientRect();
+    if (rect.height || rect.width) {
+      const delta = rect.top - container.getBoundingClientRect().top - anchor.viewportTop;
+      if (Math.abs(delta) > .5) container.scrollTop += delta;
+      return true;
+    }
+  }
   const blocks = [...article.querySelectorAll<HTMLElement>(blockSelector)]
     .filter((block) => !block.hasAttribute("data-section-hidden"));
   let target: HTMLElement | undefined = blocks[anchor.blockIndex];

@@ -18,6 +18,9 @@ for (const [index, name] of names.entries()) {
 }
 
 const requested = params.get("sample");
+if (params.has("sourceHighlights")) {
+  documents.get(paths[1])!.content = "# 文件内高亮\n\nabcdefghijklmno\n\n第二段 **加粗文字** 与 [链接文字](https://example.com)。\n";
+}
 const listeners = new Map<string, Set<number>>();
 const positions = new Map<string, { path: string; headingId: string | null; headingRatio: number; documentRatio: number }>();
 const positionWrites: string[] = [];
@@ -27,6 +30,7 @@ const documentReadDelays = new Map<string, number>();
 const highlights: (TextHighlight & { deleted?: boolean })[] = [];
 const tabPositions = new Map<string, Map<string, unknown>>();
 const windowRequests: (string | null)[] = [];
+const revealRequests: string[][] = [];
 const qaFonts = [{ family: "Arial", displayName: "Arial（本地化）", aliases: ["ArialMT"], faces: { regular: "Arial", bold: "Arial Bold", italic: "Arial Italic", boldItalic: "Arial Bold Italic" }, supportsCjk: false, supportsLatin: true },
   { family: "Noto Serif SC", displayName: "思源宋体", aliases: ["NotoSerifSC-Regular"], supportsCjk: true, supportsLatin: true },
   ...Array.from({ length: 54 }, (_, index) => index === 0
@@ -34,7 +38,7 @@ const qaFonts = [{ family: "Arial", displayName: "Arial（本地化）", aliases
     : index === 1
       ? { family: "Microsoft YaHei", displayName: "微软雅黑", aliases: [], supportsCjk: true, supportsLatin: true }
       : { family: `Sample Font ${String(index + 1).padStart(2, "0")}`, displayName: `样张字体 ${index + 1}`, aliases: [], supportsCjk: index % 2 === 0, supportsLatin: true })];
-const state = { basePreferences: initial, saves: [] as ReaderPreferences[], calls: [] as string[], scopedCalls: [] as { command: string; tabId: unknown; path: unknown }[], windowRequests, fontCalls: 0, fonts: qaFonts, fontFailures: 0, positions, positionWrites, positionReadFailures, positionReadDelays, documentReadDelays, highlights, selected: paths[names.indexOf(requested ?? "")] ?? paths[0],
+const state = { basePreferences: initial, documents, writeFailures: 0, saves: [] as ReaderPreferences[], calls: [] as string[], scopedCalls: [] as { command: string; tabId: unknown; path: unknown }[], windowRequests, revealRequests, revealFailure: false, fontCalls: 0, fonts: qaFonts, fontFailures: 0, positions, positionWrites, positionReadFailures, positionReadDelays, documentReadDelays, highlights, selected: paths[names.indexOf(requested ?? "")] ?? paths[0],
   emitPreferences(preferences: ReaderPreferences) {
     for (const handler of listeners.get("preferences-updated") ?? []) callbacks.get(handler)?.({ payload: { source: "other-window", preferences } });
   },
@@ -66,12 +70,26 @@ const internals = {
       case "read_document": {
         const path = String(args.path);
         await new Promise((resolve) => setTimeout(resolve, documentReadDelays.get(path) ?? 0));
-        return documents.get(path) ?? Promise.reject(new Error(`Unknown QA document: ${path}`));
+        const doc = documents.get(path);
+        return doc ? structuredClone(doc) : Promise.reject(new Error(`Unknown QA document: ${path}`));
       }
       case "open_target": return { root, selectedFile: args.path === root ? null : String(args.path) };
       case "list_directory": return names.map((name, index) => ({ path: paths[index], name, kind: "markdown" }));
       case "load_expanded_paths": case "list_text_highlights": return [];
       case "list_document_highlights": return highlights.filter((item) => !item.deleted && item.path === args.path).map((item) => ({ ...item }));
+      case "begin_file_highlight_migration": return "C:\\qa-backups\\migration";
+      case "highlight_migration_files": return [...new Set(highlights.filter((h) => !h.deleted).map((h) => h.path))];
+      case "write_file_highlights": {
+        if (state.writeFailures > 0) { state.writeFailures--; throw new Error("备份失败，未修改原文。"); }
+        const doc = documents.get(String(args.path))!;
+        if (doc.content !== args.expected) throw new Error("原文件已变化，未覆盖外部修改。");
+        doc.content = String(args.content);
+        doc.modifiedMs = Date.now();
+        for (const id of args.migratedIds as number[]) highlights.find((h) => h.id === id)!.deleted = true;
+        highlightsChanged();
+        for (const id of listeners.get("external-change") ?? []) callbacks.get(id)?.({ payload: { path: doc.path, kind: "modify" } });
+        return { content: doc.content, backupPath: "C:\\qa-backups\\original" };
+      }
       case "list_recent_highlights": return highlights.filter((item) => !item.deleted).map((item) => ({ ...item }));
       case "create_text_highlight": {
         const item = { ...(args.highlight as TextHighlight), id: highlights.length + 1, root, createdMs: Date.now(), updatedMs: Date.now() };
@@ -114,6 +132,9 @@ const internals = {
       case "plugin:event|unlisten": return null;
       case "plugin:dialog|open": return params.get("dialogFile") ?? paths[0];
       case "open_in_new_window": windowRequests.push(args.path as string | null); return null;
+      case "plugin:opener|reveal_item_in_dir":
+        if (state.revealFailure) throw new Error("QA file unavailable");
+        revealRequests.push(args.paths as string[]); return null;
       case "start_watch": case "index_root": case "set_path_expanded": case "close_tab": return null;
       case "read_asset": if (params.has("imageResize")) return { mime: "image/svg+xml", data: Array.from(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1200"><rect width="800" height="1200" fill="#608b9f"/></svg>')) }; throw new Error("Asset unavailable in this fixture");
       default: throw new Error(`Unexpected QA invoke: ${command}`);

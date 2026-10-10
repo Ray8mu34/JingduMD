@@ -66,7 +66,7 @@ function ApplicationSettings({ value, root, onChange, onClose }: Props) {
           <button disabled={!diagnostics?.status.running || indexAction !== ""} onClick={() => void cancelIndex()}><Ban />取消索引</button>
           <button disabled={!root || !diagnostics?.highlightCount} onClick={() => void clearHighlights()}><X />清除当前目录高亮</button>
         </div>
-        <small>预设、个人样式、索引、阅读状态和高亮只保存在应用 AppData，资料目录保持零写入。高亮会保存选中文字及前后少量上下文，用于外部修改后的重新定位，但不保存完整 Markdown 副本。</small>
+        <small>预设、索引和阅读状态保存在应用 AppData。新高亮以语法标记写入 Markdown，每次写入前备份原文；旧数据库高亮可在“标注管理与备份”中迁移。这里的数量和清除操作仅针对旧数据库标注。</small>
       </section>
     </div>
   </aside>;
