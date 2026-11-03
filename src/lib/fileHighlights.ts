@@ -15,7 +15,8 @@ const parser = unified().use(remarkParse).use(remarkGfm).use(remarkMath).use(rem
 
 // The renderer normalizes only TeX delimiters. Map its offsets back to the
 // unchanged source; never write normalized formulas back into the document.
-function normalized(source: string) {
+export type HighlightNormalizer = (source: string) => { text: string; offsets: number[] };
+export function normalized(source: string) {
   const text = normalizeTexDelimiters(source);
   const offsets: number[] = [];
   let raw = 0;
@@ -30,21 +31,49 @@ function normalized(source: string) {
   return { text, offsets };
 }
 
-function textLeaves(source: string, includeUnsupported = false) {
-  const n = normalized(source);
+// CommonMark removes container prefixes from text values (list indentation,
+// blockquote markers), while positions still span those original bytes.
+// Map each physical line independently, preserving the rendered value and
+// mapping only proven, identical text. Never guess around escapes/entities.
+function textParts(source: string, start: number, end: number, value: string) {
+  type Part = { start: number; end: number; value: string; exact: boolean };
+  if (source.slice(start, end) === value) return [{ start, end, value, exact: !( /[\r\n]/.test(value) && !value.trim()) }];
+  const lines = (text: string) => [...text.matchAll(/([^\r\n]*)(\r\n|\r|\n|$)/g)].filter((m) => m[0].length);
+  const rawLines = lines(source.slice(start, end)), renderedLines = lines(value);
+  if (rawLines.length !== renderedLines.length) return [{ start, end, value, exact: false }];
+  const result: Part[] = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    const raw = rawLines[i], rendered = renderedLines[i];
+    const offset = start + raw.index!;
+    const prefix = raw[1].length - rendered[1].length;
+    const exact = prefix >= 0 && raw[1].endsWith(rendered[1]) && /^[ \t>]*$/.test(raw[1].slice(0, prefix));
+    if (rendered[1]) result.push({ start: offset + (exact ? prefix : 0), end: offset + raw[1].length, value: rendered[1], exact });
+    // Keep structural newlines outside spans, so a closing marker never lands
+    // before the next line's list/blockquote prefix.
+    if (rendered[2]) result.push({ start: offset + raw[1].length, end: offset + raw[0].length, value: rendered[2], exact: false });
+  }
+  return result;
+}
+
+function textLeaves(source: string, includeUnsupported = false, normalize: HighlightNormalizer = normalized) {
+  const n = normalize(source);
   const leaves: { start: number; end: number; value: string; exact: boolean }[] = [];
   visit(parser.parse(n.text), (node) => {
     if (!(node.type === "text" || includeUnsupported && ["inlineCode", "code", "inlineMath", "math", "html", "yaml"].includes(node.type)) || !("value" in node)) return;
     const start = n.offsets[node.position!.start.offset!];
     const end = n.offsets[node.position!.end.offset!];
-    leaves.push({ start, end, value: String(node.value), exact: node.type === "text" && source.slice(start, end) === node.value });
+    if (node.type !== "text") { leaves.push({ start, end, value: String(node.value), exact: false }); return; }
+    for (const part of textParts(n.text, node.position!.start.offset!, node.position!.end.offset!, node.value)) {
+      const a = n.offsets[part.start], b = n.offsets[part.end];
+      leaves.push({ start: a, end: b, value: part.value, exact: part.exact && source.slice(a, b) === part.value });
+    }
   });
   return leaves;
 }
 
-export function parseFileHighlights(source: string): { clean: string; ranges: FileHighlight[] } {
+export function parseFileHighlights(source: string, normalize: HighlightNormalizer = normalized): { clean: string; ranges: FileHighlight[] } {
   const tokens: { start: number; end: number; color?: HighlightColor }[] = [];
-  for (const leaf of textLeaves(source)) {
+  for (const leaf of textLeaves(source, false, normalize)) {
     if (!leaf.exact) continue;
     for (const match of source.slice(leaf.start, leaf.end).matchAll(/==([🔴🟠🟡🟢🔵🟣])?/gu)) {
       const start = leaf.start + match.index!;
@@ -70,8 +99,8 @@ export function parseFileHighlights(source: string): { clean: string; ranges: Fi
 }
 
 type SourceRegion = { start: number; end: number; first: number; last: number; type: string };
-function sourceStructure(source: string) {
-  const n = normalized(source);
+function sourceStructure(source: string, normalize: HighlightNormalizer = normalized) {
+  const n = normalize(source);
   const blocks: SourceRegion[] = [], inline: SourceRegion[] = [], protectedRegions: SourceRegion[] = [];
   const bounds = (node: Nodes): [number, number] => [n.offsets[node.position!.start.offset!], n.offsets[node.position!.end.offset!]];
   visit(parser.parse(n.text), (node) => {
@@ -92,9 +121,9 @@ function sourceStructure(source: string) {
   return { blocks, inline, protectedRegions };
 }
 
-export function coalesceFileHighlights(clean: string, ranges: FileHighlight[]): FileHighlight[] {
-  const structure = sourceStructure(clean);
-  const leaves = textLeaves(clean);
+export function coalesceFileHighlights(clean: string, ranges: FileHighlight[], normalize: HighlightNormalizer = normalized): FileHighlight[] {
+  const structure = sourceStructure(clean, normalize);
+  const leaves = textLeaves(clean, false, normalize);
   const result = ranges.map((r) => ({ ...r })).sort((a, b) => a.start - b.start || b.end - a.end);
   let changed = true;
   while (changed) {
@@ -125,8 +154,8 @@ export function coalesceFileHighlights(clean: string, ranges: FileHighlight[]): 
   return result;
 }
 
-function safeFileRanges(clean: string, ranges: FileHighlight[]): FileHighlight[] {
-  const { blocks, inline, protectedRegions } = sourceStructure(clean);
+function safeFileRanges(clean: string, ranges: FileHighlight[], normalize: HighlightNormalizer = normalized): FileHighlight[] {
+  const { blocks, inline, protectedRegions } = sourceStructure(clean, normalize);
   return ranges.flatMap((range) => blocks.flatMap((block) => {
     let parts = [{ ...range, start: Math.max(range.start, block.start), end: Math.min(range.end, block.end) }].filter((p) => p.start < p.end);
     for (const barrier of protectedRegions) {
@@ -148,8 +177,8 @@ function safeFileRanges(clean: string, ranges: FileHighlight[]): FileHighlight[]
   }));
 }
 
-export function matchingFileHighlight(clean: string, ranges: FileHighlight[], selection: { start: number; end: number }) {
-  const leaves = textLeaves(clean);
+export function matchingFileHighlight(clean: string, ranges: FileHighlight[], selection: { start: number; end: number }, normalize: HighlightNormalizer = normalized) {
+  const leaves = textLeaves(clean, false, normalize);
   return ranges.find((r) => {
     const included = leaves.filter((l) => l.start < r.end && l.end > r.start);
     return included.length && Math.max(r.start, included[0].start) === selection.start && Math.min(r.end, included.at(-1)!.end) === selection.end;
@@ -158,8 +187,8 @@ export function matchingFileHighlight(clean: string, ranges: FileHighlight[], se
 
 // Write paragraph-level ranges rather than text-leaf ranges. Nested highlights
 // stay intact; crossing ranges close and reopen only where necessary.
-export function serializeFileHighlights(clean: string, ranges: FileHighlight[]): string {
-  const safe = safeFileRanges(clean, coalesceFileHighlights(clean, ranges));
+export function serializeFileHighlights(clean: string, ranges: FileHighlight[], normalize: HighlightNormalizer = normalized): string {
+  const safe = safeFileRanges(clean, coalesceFileHighlights(clean, ranges, normalize), normalize);
   const points = [...new Set([0, clean.length, ...safe.flatMap((r) => [r.start, r.end])])].sort((a, b) => a - b);
   let output = "";
   let active: FileHighlight[] = [];
@@ -174,32 +203,34 @@ export function serializeFileHighlights(clean: string, ranges: FileHighlight[]):
     active = next;
   }
   const serialized = output + "==".repeat(active.length);
-  if (parseFileHighlights(serialized).clean !== clean) throw new Error("选区附近存在无法安全配对的高亮标记，未修改原文。");
+  if (parseFileHighlights(serialized, normalize).clean !== clean) throw new Error("选区附近存在无法安全配对的高亮标记，未修改原文。");
   return serialized;
 }
 
-export function prepareFileHighlights(source: string) {
-  const parsed = parseFileHighlights(source);
-  const n = normalized(parsed.clean);
+export function prepareFileHighlights(source: string, normalize: HighlightNormalizer = normalized, sourceOffset = 0, idOffset = 0) {
+  const parsed = parseFileHighlights(source, normalize);
+  const n = normalize(parsed.clean);
   const split = splitFrontmatter(n.text);
   const bodyOffset = n.text.length - split.body.length;
   function plugin() {
     return (tree: Root) => {
       visit(tree, "text", (node: Text, index, parent) => {
         if (index == null || !parent || !node.position) return;
-        const start = n.offsets[bodyOffset + node.position.start.offset!];
-        const end = n.offsets[bodyOffset + node.position.end.offset!];
-        if (parsed.clean.slice(start, end) !== node.value) return;
+        const parts = textParts(n.text, bodyOffset + node.position.start.offset!, bodyOffset + node.position.end.offset!, node.value);
+        const children = parts.flatMap((part): Text[] => {
+        const start = n.offsets[part.start], end = n.offsets[part.end];
+        if (!part.exact || parsed.clean.slice(start, end) !== part.value) return [{ type: "text", value: part.value }];
         const relevant = parsed.ranges.filter((r) => r.start < end && r.end > start);
         const points = [...new Set([start, end, ...relevant.flatMap((r) => [Math.max(start, r.start), Math.min(end, r.end)])])].sort((a, b) => a - b);
-        const children = points.slice(0, -1).map((a, i): Text => {
+        return points.slice(0, -1).map((a, i): Text => {
           const b = points[i + 1];
           const active = relevant.filter((r) => r.start <= a && r.end >= b).sort((x, y) => x.start - y.start || y.end - x.end || y.id - x.id);
           return { type: "text", value: parsed.clean.slice(a, b), data: {
-            hName: "span", hProperties: { "data-source-start": a, "data-source-end": b,
-              "data-file-highlight": active.map((r) => r.id).join(" "),
+            hName: "span", hProperties: { "data-source-start": a + sourceOffset, "data-source-end": b + sourceOffset,
+              "data-file-highlight": active.map((r) => r.id - idOffset).join(" "),
               ...(active.length ? { className: [`file-highlight-${active.at(-1)!.color}`] } : {}) }
           } };
+        });
         });
         parent.children.splice(index, 1, ...children);
         return index + children.length;
@@ -209,29 +240,45 @@ export function prepareFileHighlights(source: string) {
   return { ...parsed, ...split, plugin };
 }
 
-export function sourceSelection(root: HTMLElement, selection: Selection): { start: number; end: number } | null {
-  if (selection.rangeCount !== 1) return null;
-  const range = selection.getRangeAt(0);
-  const boundary = (node: Node, offset: number) => {
-    const span = node.parentElement?.closest<HTMLElement>("[data-source-start]");
-    if (!span || node.nodeType !== Node.TEXT_NODE || span.firstChild !== node || span.childNodes.length !== 1) return null;
-    return Number(span.dataset.sourceStart) + offset;
-  };
-  const start = boundary(range.startContainer, range.startOffset), end = boundary(range.endContainer, range.endOffset);
-  if (start === null || end === null || end <= start) return null;
-  // Unsupported generated text (formulas, code, HTML, wikilinks) must not be
-  // silently included in a source rewrite.
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) {
-    const node = walker.currentNode;
-    if (range.intersectsNode(node) && node.textContent?.trim() && !node.parentElement?.closest("[data-source-start]")) return null;
-  }
-  return { start, end };
+// Intersect the selection with one text node, including selections whose
+// endpoints are elements or lie in generated formula content.
+export function selectedTextOffsets(range: Range, node: globalThis.Text): { start: number; end: number } | null {
+  if (!range.intersectsNode(node)) return null;
+  const clipped = document.createRange();
+  clipped.selectNodeContents(node);
+  if (range.compareBoundaryPoints(Range.START_TO_START, clipped) > 0) clipped.setStart(range.startContainer, range.startOffset);
+  if (range.compareBoundaryPoints(Range.END_TO_END, clipped) < 0) clipped.setEnd(range.endContainer, range.endOffset);
+  const start = clipped.startContainer === node ? clipped.startOffset : 0;
+  const end = clipped.endContainer === node ? clipped.endOffset : node.length;
+  return !clipped.collapsed && end > start ? { start, end } : null;
 }
 
-export function fileHighlightRecords(source: string, path: string, root: string): TextHighlight[] {
-  const { clean, ranges } = parseFileHighlights(source);
-  const leaves = textLeaves(clean);
+export function sourceSelections(root: HTMLElement, selection: Selection): { start: number; end: number }[] {
+  if (selection.rangeCount !== 1) return [];
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return [];
+  const result: { start: number; end: number }[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode as globalThis.Text;
+    const span = node.parentElement?.closest<HTMLElement>("[data-source-start]");
+    if (!span || span.firstChild !== node || span.childNodes.length !== 1) continue;
+    const selected = selectedTextOffsets(range, node);
+    if (!selected) continue;
+    const offset = Number(span.dataset.sourceStart);
+    result.push({ start: offset + selected.start, end: offset + selected.end });
+  }
+  return result;
+}
+
+export function sourceSelection(root: HTMLElement, selection: Selection): { start: number; end: number } | null {
+  const parts = sourceSelections(root, selection);
+  return parts.length ? { start: parts[0].start, end: parts.at(-1)!.end } : null;
+}
+
+export function fileHighlightRecords(source: string, path: string, root: string, normalize: HighlightNormalizer = normalized): TextHighlight[] {
+  const { clean, ranges } = parseFileHighlights(source, normalize);
+  const leaves = textLeaves(clean, false, normalize);
   return ranges.map((r) => ({ id: r.id, path, root, color: r.color,
     quote: leaves.map((l) => clean.slice(Math.max(r.start, l.start), Math.min(r.end, l.end))).filter((_, i) => leaves[i].start < r.end && leaves[i].end > r.start).join(""),
     prefix: "", suffix: "", startOffset: r.start, endOffset: r.end, headingId: null, createdMs: 0, updatedMs: 0 }));

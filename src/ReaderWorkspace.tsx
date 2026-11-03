@@ -6,6 +6,7 @@ import { TabContext } from "./lib/tabContext";
 import { isMac, primaryModifier, shortcutLabel } from "./lib/platform";
 import { useNativeMenu } from "./lib/nativeMenu";
 import FileContextMenu, { type FileMenuTarget } from "./components/FileContextMenu";
+import type { LeaveGuard } from "./lib/sourceEditing";
 
 type Tab = { id: string; session?: ReaderSession; initialPath?: string };
 const title = (tab: Tab) => (tab.session?.path || tab.initialPath || tab.session?.root)?.split(/[\\/]/).pop() || "新标签页";
@@ -17,17 +18,30 @@ export default function ReaderWorkspace() {
   const [menu, setMenu] = useState<(FileMenuTarget & { tabId: string }) | null>(null);
   const latest = useRef(tabs);
   latest.current = tabs;
+  const leaveGuard = useRef<LeaveGuard | null>(null);
+  const changing = useRef(false);
+  const registerLeaveGuard = useCallback((guard: LeaveGuard | null) => { leaveGuard.current = guard; }, []);
+  const changeTab = useCallback(async (action: () => void) => {
+    if (changing.current) return;
+    changing.current = true;
+    try { if (!leaveGuard.current || await leaveGuard.current()) action(); }
+    finally { changing.current = false; }
+  }, []);
+  const selectTab = (id: string) => { if (id !== active) void changeTab(() => setActive(id)); };
   const report = useCallback((id: string, session: ReaderSession) => {
     setTabs((items) => items.map((tab) => tab.id === id ? { ...tab, session, initialPath: undefined } : tab));
   }, []);
   const newTab = useCallback((path?: string, root?: string) => {
+    void changeTab(() => {
     const existing = path && latest.current.find((tab) => tab.session?.path === path || tab.initialPath === path);
     if (existing) { setActive(existing.id); return; }
     const id = crypto.randomUUID();
     setTabs((items) => [...items, { id, initialPath: path, session: root && path ? { root, path, back: [], forward: [] } : undefined }]);
     setActive(id);
-  }, []);
+    });
+  }, [changeTab]);
   const closeTab = useCallback((id: string) => {
+    const close = () => {
     const items = latest.current;
     const index = items.findIndex((tab) => tab.id === id);
     const remaining = items.filter((tab) => tab.id !== id);
@@ -40,10 +54,12 @@ export default function ReaderWorkspace() {
     }
     // React runs the old reader's layout cleanup (saving its position) first.
     window.setTimeout(() => void invoke("close_tab", { tabId: id }).catch(() => undefined), 0);
-  }, [active]);
+    };
+    if (id === active) void changeTab(close); else close();
+  }, [active, changeTab]);
   const cycleTab = (backward: boolean) => {
     const index = latest.current.findIndex((tab) => tab.id === active);
-    setActive(latest.current[(index + (backward ? -1 : 1) + latest.current.length) % latest.current.length].id);
+    selectTab(latest.current[(index + (backward ? -1 : 1) + latest.current.length) % latest.current.length].id);
   };
   useNativeMenu((action) => {
     if (action === "reader-new-tab") newTab();
@@ -75,7 +91,7 @@ export default function ReaderWorkspace() {
         event.preventDefault();
         setMenu({ path, tabId: item.id, x: event.clientX, y: event.clientY, trigger: event.currentTarget.querySelector<HTMLElement>('[role="tab"]')! });
       }}>
-        <button role="tab" id={`tab-${item.id}`} aria-controls="reader-tab-panel" aria-selected={item.id === active} tabIndex={item.id === active ? 0 : -1} title={item.session?.path || item.initialPath || title(item)} onClick={() => setActive(item.id)} onAuxClick={(event) => { if (event.button === 1) closeTab(item.id); }} onKeyDown={(event) => {
+        <button role="tab" id={`tab-${item.id}`} aria-controls="reader-tab-panel" aria-selected={item.id === active} tabIndex={item.id === active ? 0 : -1} title={item.session?.path || item.initialPath || title(item)} onClick={() => selectTab(item.id)} onAuxClick={(event) => { if (event.button === 1) closeTab(item.id); }} onKeyDown={(event) => {
           const path = item.session?.path || item.initialPath;
           if (path && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
             event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect();
@@ -85,8 +101,7 @@ export default function ReaderWorkspace() {
           event.preventDefault();
           const index = tabs.findIndex((tab) => tab.id === item.id);
           const next = event.key === "Home" ? tabs[0] : event.key === "End" ? tabs.at(-1)! : tabs[(index + (event.key === "ArrowLeft" ? -1 : 1) + tabs.length) % tabs.length];
-          setActive(next.id);
-          requestAnimationFrame(() => document.getElementById(`tab-${next.id}`)?.focus());
+          void changeTab(() => { setActive(next.id); requestAnimationFrame(() => document.getElementById(`tab-${next.id}`)?.focus()); });
         }}>{title(item)}</button>
         <button className="close-tab" aria-label={`关闭标签页 ${title(item)}`} onClick={() => closeTab(item.id)}><X /></button>
       </div>)}
@@ -100,6 +115,6 @@ export default function ReaderWorkspace() {
     ]} />}
   </div>;
   return <TabContext.Provider value={active}>
-    <App key={active} session={tab.session} initialPath={tab.initialPath} onSessionChange={(session) => report(active, session)} onNewTab={newTab} tabBar={bar} tabId={active} />
+    <App key={active} session={tab.session} initialPath={tab.initialPath} onSessionChange={(session) => report(active, session)} onNewTab={newTab} tabBar={bar} tabId={active} registerLeaveGuard={registerLeaveGuard} />
   </TabContext.Provider>;
 }

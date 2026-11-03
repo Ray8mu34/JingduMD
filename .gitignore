@@ -18,3 +18,8 @@ src-tauri/gen/
 *.pfx
 *.key
 *.pem
+
+# Local QA output and scratch files
+qa-artifacts/
+tmp/
+premium-audit.json

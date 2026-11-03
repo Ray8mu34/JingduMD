@@ -1,6 +1,42 @@
 import { captureTextAnchor, restoreTextAnchor } from "./readingAnchor";
 
 describe("reading text anchor", () => {
+  it("falls back to the paragraph offset when a surviving text node changes during highlighting", () => {
+    const container = document.createElement("div");
+    container.innerHTML = '<article class="markdown-body"><p>Earlier text reading here</p></article>';
+    document.body.append(container);
+    const node = container.querySelector("p")!.firstChild as Text;
+    const original = node.data;
+    node.data = "Earlier text ";
+    const mark = document.createElement("span");
+    mark.textContent = "reading here";
+    node.after(mark);
+    const range = document.createRange();
+    range.getBoundingClientRect = () => ({ top: 180, height: 20, width: 0 } as DOMRect);
+    const start = vi.spyOn(range, "setStart");
+    const create = vi.spyOn(document, "createRange").mockReturnValue(range);
+    try {
+      restoreTextAnchor(container, { blockIndex: 0, text: original, textOffset: 16,
+        context: original, viewportTop: 180, node, nodeOffset: 16, nodeText: original });
+      expect(start).toHaveBeenCalledWith(mark.firstChild, 3);
+    } finally { create.mockRestore(); container.remove(); }
+  });
+  it("restores the caret geometry at offset zero after highlight spans replace text", () => {
+    const container = document.createElement("div");
+    container.innerHTML = '<article class="markdown-body"><p><span>Paragraph start</span></p></article>';
+    container.getBoundingClientRect = () => ({ top: 0 } as DOMRect);
+    container.querySelector("p")!.getBoundingClientRect = () => ({ top: 140 } as DOMRect);
+    const range = document.createRange();
+    range.getBoundingClientRect = () => ({ top: 150, height: 20, width: 0 } as DOMRect);
+    const start = vi.spyOn(range, "setStart");
+    const create = vi.spyOn(document, "createRange").mockReturnValue(range);
+    try {
+      restoreTextAnchor(container, { blockIndex: 0, text: "Paragraph start", textOffset: 0,
+        context: "Paragraph start", viewportTop: 150, caret: true });
+      expect(start).toHaveBeenCalledWith(container.querySelector("span")!.firstChild, 0);
+      expect(container.scrollTop).toBe(0);
+    } finally { create.mockRestore(); }
+  });
   it("keeps a prose caret when preceding inline math replaces its text", () => {
     const container = document.createElement("div");
     container.innerHTML = '<article class="markdown-body"><p>Before <span class="lazy-math">x</span> keep reading here</p></article>';

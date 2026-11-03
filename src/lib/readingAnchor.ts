@@ -3,6 +3,8 @@ export type TextAnchor = {
   // These references are local to the current render. Keep prose anchored to its
   // own text node when asynchronous formulas change the surrounding textContent.
   node?: Text; nodeOffset?: number;
+  caret?: boolean;
+  nodeText?: string;
 };
 
 const blockSelector = "p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,table,.math-display,.image-frame";
@@ -36,13 +38,15 @@ export function captureTextAnchor(container: HTMLElement): TextAnchor | null {
   }
   const text = block.textContent ?? "";
   return { blockIndex, text: text.slice(0, 120), textOffset,
-    context: text.slice(Math.max(0, textOffset - 20), textOffset + 20), viewportTop, node, nodeOffset };
+    context: text.slice(Math.max(0, textOffset - 20), textOffset + 20), viewportTop, node, nodeOffset,
+    caret: !!caret && block.contains(caret.startContainer), nodeText: node?.data };
 }
 
 export function restoreTextAnchor(container: HTMLElement, anchor: TextAnchor): boolean {
   const article = container.querySelector<HTMLElement>(".markdown-body");
   if (!article) return false;
-  if (anchor.node?.isConnected && article.contains(anchor.node) && anchor.nodeOffset !== undefined) {
+  if (anchor.node?.isConnected && article.contains(anchor.node) && anchor.nodeOffset !== undefined && anchor.nodeOffset <= anchor.node.length
+    && (anchor.nodeText === undefined || anchor.node.data === anchor.nodeText)) {
     const range = document.createRange();
     range.setStart(anchor.node, Math.min(anchor.node.length, anchor.nodeOffset));
     range.collapse(true);
@@ -66,7 +70,7 @@ export function restoreTextAnchor(container: HTMLElement, anchor: TextAnchor): b
     ? text.indexOf(anchor.context) + Math.min(20, anchor.textOffset)
     : Math.min(text.length, anchor.textOffset);
   let currentTop = target.getBoundingClientRect().top;
-  if (offset > 0) {
+  if (offset > 0 || anchor.caret) {
     const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
     let remaining = offset;
     while (walker.nextNode()) {

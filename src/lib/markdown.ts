@@ -18,11 +18,11 @@ export function slugify(input: string, used = new Map<string, number>()): string
   return count ? `${base}-${count}` : base;
 }
 
-export function extractOutline(markdown: string): OutlineItem[] {
+export function extractOutline(markdown: string, prefix = ""): OutlineItem[] {
   const result: OutlineItem[] = [];
   const body = normalizeTexDelimiters(splitFrontmatter(markdown).body);
   const processor = unified().use(remarkParse).use(remarkGfm).use(remarkMath).use(remarkFrontmatter)
-    .use(remarkWikiLinks).use(remarkHeadingIds);
+    .use(remarkWikiLinks).use(remarkHeadingIds, { prefix });
   const tree = processor.runSync(processor.parse(body)) as Root;
   visit(tree, "heading", (node: Heading) => {
     const text = plainText(node.children);
@@ -145,11 +145,11 @@ function plainText(nodes: PhrasingContent[]): string {
   }).join("");
 }
 
-export function remarkHeadingIds() {
+export function remarkHeadingIds({ prefix = "" }: { prefix?: string } = {}) {
   return (tree: Root) => {
     const used = new Map<string, number>();
     visit(tree, "heading", (node: Heading) => {
-      const id = slugify(plainText(node.children), used);
+      const id = prefix + slugify(plainText(node.children), used);
       node.data = { ...node.data, hProperties: { ...(node.data?.hProperties ?? {}), id } };
     });
   };
@@ -166,6 +166,24 @@ export function remarkCallouts() {
       const kind = marker[1].toLowerCase();
       first.value = first.value.slice(marker[0].length);
       node.data = { ...node.data, hProperties: { ...(node.data?.hProperties ?? {}), "data-callout": kind } };
+    });
+  };
+}
+
+/** A figure on its own source line can share a paragraph with its caption.
+ * Keep those figures full-size without enlarging icons embedded in prose.
+ */
+export function remarkImageLayout() {
+  return (tree: Root) => {
+    visit(tree, "paragraph", (node: Paragraph) => {
+      node.children.forEach((child, index) => {
+        if (child.type !== "image" && child.type !== "imageReference") return;
+        const before = node.children[index - 1];
+        const after = node.children[index + 1];
+        const startsLine = !before || before.type === "break" || before.type === "text" && /(?:^|\n)\s*$/.test(before.value);
+        const endsLine = !after || after.type === "break" || after.type === "text" && /^\s*(?:\n|$)/.test(after.value);
+        child.data = { ...child.data, hProperties: { ...child.data?.hProperties, "data-image-layout": startsLine && endsLine ? "block" : "inline" } };
+      });
     });
   };
 }

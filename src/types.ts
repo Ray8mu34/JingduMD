@@ -1,7 +1,7 @@
 export type OpenTarget = { root: string; selectedFile: string | null };
 export type DirectoryEntry = { name: string; path: string; kind: "directory" | "markdown"; hasChildren: boolean };
 export type OutlineItem = { level: number; text: string; id: string };
-export type DocumentPayload = { path: string; name: string; content: string; modifiedMs: number; size: number };
+export type DocumentPayload = { path: string; name: string; content: string; modifiedMs: number; size: number; revision?: string };
 export type SearchResult = { path: string; name: string; snippet: string; score: number };
 export type SearchResponse = { results: SearchResult[]; partial: boolean; mode: "empty" | "index" | "scan" };
 export type FontFaces = { regular?: string; bold?: string; italic?: string; boldItalic?: string };
@@ -107,7 +107,7 @@ export type TextHighlight = {
   createdMs: number;
   updatedMs: number;
 };
-export type NewTextHighlight = Omit<TextHighlight, "id" | "root" | "createdMs" | "updatedMs"> & { sourceRange?: { start: number; end: number }; sourceContent?: string };
+export type NewTextHighlight = Omit<TextHighlight, "id" | "root" | "createdMs" | "updatedMs"> & { sourceRange?: { start: number; end: number }; sourceRanges?: { start: number; end: number }[]; sourceContent?: string };
 export type ResolvedHighlight = TextHighlight & { range: Range | null; orphaned: boolean };
 
 export const DEFAULT_PREFERENCES: ReaderPreferences = {

@@ -111,7 +111,7 @@ pub(crate) fn create_reader_window(app: &AppHandle, path: Option<String>) -> Res
         .transpose()?;
     if let Some(path) = &path {
         let target = Path::new(path);
-        if !target.is_dir() && !(target.is_file() && is_markdown(target)) {
+        if !target.is_dir() && !(target.is_file() && is_readable(target)) {
             return Err("请选择 Markdown 文件或文件夹".into());
         }
     }

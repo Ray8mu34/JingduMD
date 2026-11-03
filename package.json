@@ -1,7 +1,7 @@
 {
   "name": "jingreader",
   "private": true,
-  "version": "0.9.3",
+  "version": "0.9.8",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "test:watch": "vitest",
     "qa:layout": "node scripts/qa-layout.mjs",
     "qa:highlights": "node scripts/qa-highlights.mjs",
+    "qa:highlight-position": "node scripts/qa-highlight-position.mjs",
     "qa:legacy": "node scripts/qa-legacy.mjs",
     "qa:print": "node scripts/qa-print.mjs",
     "qa:settings": "node scripts/qa-settings.mjs",
@@ -74,3 +75,5 @@
     ]
   }
 }
+
+

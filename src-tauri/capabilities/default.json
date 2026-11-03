@@ -17,6 +17,7 @@
     "core:webview:allow-print",
     "dialog:allow-open",
     "opener:allow-open-url",
+    "opener:allow-default-urls",
     "opener:allow-reveal-item-in-dir"
   ]
 }

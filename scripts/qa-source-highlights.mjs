@@ -93,6 +93,18 @@ try {
     await page.getByRole("button", { name: "撤销删除" }).click();
     await page.locator(".markdown-body strong .file-highlight-blue").waitFor();
     await page.screenshot({ path: `qa-artifacts/source-continuity-${width}.png` });
+    await page.evaluate(() => {
+      const p = document.querySelectorAll('.markdown-body p')[2];
+      const range = document.createRange(); range.selectNodeContents(p);
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      p.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+    });
+    await page.getByRole('button', { name: '添加绿色高亮' }).click();
+    await page.getByRole('toolbar').waitFor({ state: 'hidden' });
+    assert((await source()).includes('==🟢已知 ==$p(y)$==🟢 和 ==\\(p(x \\mid y)\\)==🟢，也可以采样。=='));
+    assert.equal(await page.locator('.markdown-body p').nth(2).locator('.file-highlight-green').count(), 3);
+    assert.equal(await page.locator('.katex .file-highlight-green').count(), 0);
+    await page.screenshot({ path: `qa-artifacts/source-formula-selection-${width}.png` });
     assert.equal(errors.length, 0, errors.join("\n"));
     results.push({ width, nested: true, crossing: true, undo: true, migration: true, backupFailure: true, staleWrite: true, formattedContinuity: true, formattedRecolorDeleteUndo: true, errors });
     await page.close();

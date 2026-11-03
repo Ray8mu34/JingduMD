@@ -27,6 +27,9 @@ use walkdir::WalkDir;
 use windows::{create_reader_window, open_external_target, WindowRegistry, WindowState};
 mod annotations;
 mod file_highlights;
+mod recovery;
+mod document_images;
+mod notebook;
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -55,6 +58,7 @@ struct DocumentPayload {
     content: String,
     modified_ms: u64,
     size: u64,
+    revision: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -463,6 +467,18 @@ fn sqlite_storage_bytes(path: &Path) -> u64 {
     .sum()
 }
 
+fn is_readable(path: &Path) -> bool {
+    is_markdown(path) || notebook::is_notebook(path)
+}
+
+fn search_text(path: &Path) -> Result<String, String> {
+    if fs::metadata(path).map_err(|e| e.to_string())?.len() > 64 * 1024 * 1024 {
+        return Err("文档超过 64MB 安全上限".into());
+    }
+    let content = read_text(path)?;
+    if notebook::is_notebook(path) { notebook::search_text(&content) } else { Ok(content) }
+}
+
 fn is_markdown(path: &Path) -> bool {
     path.extension()
         .and_then(OsStr::to_str)
@@ -539,7 +555,7 @@ fn to_string(path: &Path) -> String {
 fn open_target(state: WindowState, path: String) -> Result<OpenTarget, String> {
     let target = canonical(&path)?;
     let (root, selected_file) = if target.is_file() {
-        if !is_markdown(&target) {
+        if !is_readable(&target) {
             return Err("首版只支持 Markdown 文件".into());
         }
         (
@@ -613,7 +629,7 @@ fn list_directory(state: WindowState, path: String) -> Result<Vec<DirectoryEntry
                 kind: "directory",
                 has_children: true,
             });
-        } else if file_type.is_file() && is_markdown(&item_path) {
+        } else if file_type.is_file() && is_readable(&item_path) {
             entries.push(DirectoryEntry {
                 name,
                 path: to_string(&item_path),
@@ -632,21 +648,22 @@ fn list_directory(state: WindowState, path: String) -> Result<Vec<DirectoryEntry
 #[tauri::command]
 fn read_document(state: WindowState, path: String) -> Result<DocumentPayload, String> {
     let file = guarded_path(&state, &path)?;
-    if !file.is_file() || !is_markdown(&file) {
-        return Err("目标不是 Markdown 文件".into());
+    if !file.is_file() || !is_readable(&file) {
+        return Err("目标不是 Markdown 或 Notebook 文件".into());
     }
     let metadata = fs::metadata(&file).map_err(|e| e.to_string())?;
     if metadata.len() > 64 * 1024 * 1024 {
         return Err("文档超过 64MB 安全上限".into());
     }
-    let content = read_text(&file)?;
+    let bytes = fs::read(&file).map_err(|e| format!("读取失败：{e}"))?;
+    let content = decode_text(&bytes);
     let root = state.current_root.lock().clone().ok_or("尚未打开文件夹")?;
-    annotations::observe(
+    if !notebook::is_notebook(&file) { annotations::observe(
         &state.db.lock(),
         &to_string(&file),
         &to_string(&root),
         &content,
-    )?;
+    )?; }
     Ok(DocumentPayload {
         path: to_string(&file),
         name: file
@@ -657,6 +674,7 @@ fn read_document(state: WindowState, path: String) -> Result<DocumentPayload, St
         content,
         modified_ms: metadata.modified().map(now_ms).unwrap_or_default(),
         size: metadata.len(),
+        revision: file_highlights::revision(&bytes),
     })
 }
 
@@ -667,8 +685,8 @@ fn read_asset(
     path: String,
 ) -> Result<AssetPayload, String> {
     let document = guarded_path(&state, &document_path)?;
-    if !document.is_file() || !is_markdown(&document) {
-        return Err("目标不是 Markdown 文件".into());
+    if !document.is_file() || !is_readable(&document) {
+        return Err("目标不是 Markdown 或 Notebook 文件".into());
     }
     // Images may live outside the opened folder (e.g. ../../assets/01/relations.png).
     // Keep the document scoped to this tab, and only relax the image path boundary.
@@ -869,7 +887,7 @@ fn collect_markdown(root: &Path) -> Vec<PathBuf> {
             entry.depth() == 0 || !ignored_name(&entry.file_name().to_string_lossy())
         })
         .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file() && is_markdown(entry.path()))
+        .filter(|entry| entry.file_type().is_file() && is_readable(entry.path()))
         .map(|entry| entry.into_path())
         .collect()
 }
@@ -1235,7 +1253,7 @@ fn search_documents_sync(
         if state.search_generation.load(Ordering::Acquire) != generation {
             break;
         }
-        let Ok(content) = read_text(Path::new(&path)) else {
+        let Ok(content) = search_text(Path::new(&path)) else {
             continue;
         };
         if let Some(snippet) = snippet_for_query(&content, &query) {
@@ -1270,9 +1288,13 @@ fn search_documents_sync(
 fn update_index_path(state: &AppState, root: &Path, path: &Path) -> Result<(), String> {
     let root_string = to_string(root);
     let path_string = to_string(path);
-    let document = if path.is_file() && is_markdown(path) {
+    let document = if path.is_file() && is_readable(path) {
         let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
-        let content = read_text(path)?;
+        // A damaged notebook must still notify the reader and discard stale FTS
+        // content, so its explicit parse error becomes visible after a change.
+        let content = search_text(path).or_else(|error| {
+            if notebook::is_notebook(path) { Ok(String::new()) } else { Err(error) }
+        })?;
         let name = path
             .file_name()
             .unwrap_or_default()
@@ -1400,7 +1422,7 @@ fn queue_watch_event(
         if ignored_watch_path(root, &path) {
             continue;
         }
-        if is_markdown(&path) {
+        if is_readable(&path) {
             pending.insert(path, kind.clone());
         } else if path.is_dir()
             || (!path.exists() && (kind.contains("Remove") || kind.contains("Name")))
@@ -2327,6 +2349,7 @@ pub fn run() {
             repair_installed_context_menu().ok();
             let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
             fs::create_dir_all(&data_dir)?;
+            let _ = recovery::maintain(&data_dir);
             let db_path = data_dir.join("jingreader.sqlite3");
             let db = init_db(&db_path).map_err(std::io::Error::other)?;
             let startup_target = first_path_argument(&std::env::args().collect::<Vec<_>>());
@@ -2348,6 +2371,9 @@ pub fn run() {
             list_directory,
             read_document,
             file_highlights::write_file_highlights,
+            file_highlights::save_document,
+            document_images::import_document_image,
+            document_images::finish_document_image,
             file_highlights::highlight_migration_files,
             file_highlights::begin_file_highlight_migration,
             read_asset,

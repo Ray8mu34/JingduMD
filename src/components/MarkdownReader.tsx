@@ -18,8 +18,12 @@ import { isExternalUrl, resolveLocalPath } from "../lib/paths";
 import { holdImageResizeScroll } from "../lib/imageResizeScroll";
 import { imageSizeKey, readImageWidth, saveImageWidth } from "../lib/imageSizing";
 import { useOutsideDismiss } from "../lib/useOutsideDismiss";
-import { remarkCallouts, remarkHeadingIds, remarkSanitizeHtml, remarkWikiLinks } from "../lib/markdown";
+import { remarkCallouts, remarkHeadingIds, remarkImageLayout, remarkSanitizeHtml, remarkWikiLinks } from "../lib/markdown";
 import { prepareFileHighlights } from "../lib/fileHighlights";
+import { notebookHighlightCells, prepareNotebookCell } from "../lib/notebookHighlights";
+import { isNotebook, parseNotebook, notebookImage, notebookOutline, type Notebook } from "../lib/notebook";
+import { visit } from "unist-util-visit";
+import type { Root } from "mdast";
 
 const markdownSanitizeSchema = {
   ...defaultSchema,
@@ -28,11 +32,12 @@ const markdownSanitizeSchema = {
     code: [["className", /^language-./, "math-inline", "math-display"]],
     blockquote: [["dataCallout", /^(note|tip|important|warning|caution|info|example|quote)$/]],
     a: [...(defaultSchema.attributes?.a ?? []), "id"],
+    img: [...(defaultSchema.attributes?.img ?? []), ["dataImageLayout", "block", "inline"]],
     span: [...(defaultSchema.attributes?.span ?? []), "dataSourceStart", "dataSourceEnd", "dataFileHighlight", ["className", /^file-highlight-/]]
   }
 };
 const ReaderNightContext = createContext(false);
-const markdownPlugins = [remarkGfm, remarkMath, remarkFrontmatter, remarkWikiLinks, remarkCallouts, remarkHeadingIds, remarkSanitizeHtml];
+const markdownPlugins = [remarkGfm, remarkMath, remarkFrontmatter, remarkWikiLinks, remarkCallouts, remarkHeadingIds, remarkImageLayout, remarkSanitizeHtml];
 const htmlPlugins: PluggableList = [rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]];
 
 function useVisible<T extends HTMLElement>(rootMargin = "500px", eager = false) {
@@ -62,24 +67,25 @@ function remoteHost(source: string): string {
   catch { return ""; }
 }
 
-function LocalImage({ documentPath, source, alt, remotePolicy, allowedRemoteHosts, onAllowRemoteHost, loadMargin }: {
+function LocalImage({ documentPath, source, alt, inline, remotePolicy, allowedRemoteHosts, onAllowRemoteHost, loadMargin }: {
   documentPath: string;
   source: string;
   alt?: string;
+  inline: boolean;
   remotePolicy: RemoteImagePolicy;
   allowedRemoteHosts: string[];
   onAllowRemoteHost: (host: string) => void;
   loadMargin: string;
 }) {
   const invoke = useTabInvoke();
-  const { ref, visible } = useVisible<HTMLSpanElement>(loadMargin);
+  const { ref, visible } = useVisible<HTMLSpanElement>(loadMargin, source.startsWith("data:"));
   const [url, setUrl] = useState("");
   const [error, setError] = useState(false);
   const [allowOnce, setAllowOnce] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const sizeKey = imageSizeKey(documentPath, source);
-  const [displayWidth, setDisplayWidth] = useState(() => readImageWidth(sizeKey));
+  const [displayWidth, setDisplayWidth] = useState(() => source.startsWith("data:") ? null : readImageWidth(sizeKey));
   const [naturalWidth, setNaturalWidth] = useState(0);
   const [naturalHeight, setNaturalHeight] = useState(0);
   const [renderedWidth, setRenderedWidth] = useState(0);
@@ -104,7 +110,7 @@ function LocalImage({ documentPath, source, alt, remotePolicy, allowedRemoteHost
   useOutsideDismiss(sizing, [actionsRef], () => setSizing(false));
   const changeWidth = (width: number | null) => {
     setDisplayWidth(width);
-    saveImageWidth(sizeKey, width);
+    if (!source.startsWith("data:")) saveImageWidth(sizeKey, width);
   };
   const previewCaller = useRef<HTMLElement | null>(null);
   const printCollapsed = useRef(false);
@@ -147,7 +153,7 @@ function LocalImage({ documentPath, source, alt, remotePolicy, allowedRemoteHost
   const imageLabel = alt?.trim() || source.split(/[\\/]/).pop() || "图片";
   const closePreview = () => { setZoomed(false); window.setTimeout(() => previewCaller.current?.focus(), 0); };
 
-  return <span ref={ref} className={`image-frame ${collapsed ? "is-collapsed" : ""}`}>
+  return <span ref={ref} className={`image-frame ${inline ? "image-inline" : "image-block"} ${collapsed ? "is-collapsed" : ""}`}>
     {url ? <>{collapsed
       ? <span className="collapsed-media"><ImageIcon /><span title={imageLabel}>{imageLabel}</span><button type="button" onClick={() => setCollapsed(false)} title="展开图片"><ChevronRight />展开图片</button></span>
       : <><span ref={actionsRef} className={`image-actions ${sizing ? "is-sizing" : ""}`} aria-label="图片操作" onKeyDown={(event) => {
@@ -168,11 +174,11 @@ function LocalImage({ documentPath, source, alt, remotePolicy, allowedRemoteHost
           <button type="button" onClick={() => changeWidth(null)} disabled={displayWidth === null}>适应正文</button>
         </span>}
       </span><span className="image-viewport"><span className="image-surface" style={{ width: naturalWidth ? displayWidth === null && naturalHeight ? `min(${naturalWidth}px, ${70 * naturalWidth / naturalHeight}vh)` : `${naturalWidth * (displayWidth ?? 100) / 100}px` : undefined, maxWidth: displayWidth === null ? "100%" : "none" }}>
-        <img ref={imageRef} src={url} alt={alt ?? ""} draggable={false} tabIndex={0} loading="lazy" referrerPolicy="no-referrer" onLoad={(event) => { setNaturalWidth(event.currentTarget.naturalWidth); setNaturalHeight(event.currentTarget.naturalHeight); setRenderedWidth(event.currentTarget.getBoundingClientRect().width); }} onKeyDown={(event) => { if ((event.key === "Enter" || event.key === " ") && !event.currentTarget.closest("a")) { event.preventDefault(); previewCaller.current = event.currentTarget; setZoomed(true); } }} onClick={(event) => { if (event.currentTarget.closest("a")) return; event.preventDefault(); event.stopPropagation(); previewCaller.current = event.currentTarget; setZoomed(true); }} />
+        <img ref={imageRef} src={url} alt={alt ?? ""} onError={() => { setUrl(""); setError(true); }} draggable={false} tabIndex={0} loading={source.startsWith("data:") ? "eager" : "lazy"} referrerPolicy="no-referrer" onLoad={(event) => { setNaturalWidth(event.currentTarget.naturalWidth); setNaturalHeight(event.currentTarget.naturalHeight); setRenderedWidth(event.currentTarget.getBoundingClientRect().width); }} onKeyDown={(event) => { if ((event.key === "Enter" || event.key === " ") && !event.currentTarget.closest("a")) { event.preventDefault(); previewCaller.current = event.currentTarget; setZoomed(true); } }} onClick={(event) => { if (event.currentTarget.closest("a")) return; event.preventDefault(); event.stopPropagation(); previewCaller.current = event.currentTarget; setZoomed(true); }} />
         {(["top-left", "top-right", "bottom-left", "bottom-right"] as const).map((corner, index) => <button key={corner} className={`image-resize-handle ${corner}`} type="button" aria-label={`${["左上角", "右上角", "左下角", "右下角"][index]}拖动缩放图片`} title={`${["左上角", "右上角", "左下角", "右下角"][index]}拖动缩放图片 · ${percent}%（双击恢复 100%）`} onClick={(event) => event.stopPropagation()} onDoubleClick={() => changeWidth(100)} onKeyDown={(event) => { if (["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp"].includes(event.key)) { event.preventDefault(); changeWidth(Math.max(1, Math.min(400, percent + (["ArrowLeft", "ArrowDown"].includes(event.key) ? -5 : 5)))); } }} onPointerDown={(event) => { if (event.button !== 0 || !naturalWidth) return; event.preventDefault(); event.stopPropagation(); scrollHold.current = holdImageResizeScroll(event.currentTarget); resizeRef.current = { x: event.clientX, y: event.clientY, width: imageRef.current?.getBoundingClientRect().width ?? naturalWidth }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { const drag = resizeRef.current; if (!drag) return; const dx = (event.clientX - drag.x) * (corner.endsWith("left") ? -1 : 1); const dy = (event.clientY - drag.y) * (corner.startsWith("top") ? -1 : 1) * (naturalWidth / (naturalHeight || naturalWidth)); const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy; changeWidth(Math.max(1, Math.min(400, Math.round((drag.width + delta) / naturalWidth * 100)))); }} onPointerUp={(event) => { finishResize(); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={finishResize} onLostPointerCapture={finishResize}><Maximize2 /></button>)}
       </span></span></>}
       {zoomed && createPortal(<ImagePreview src={url} alt={alt || "图片预览"} onClose={closePreview} />, globalThis.document.body)}</>
-      : error ? <span className="broken-image">图片无法读取：{source}</span>
+      : error ? <span className="broken-image">图片无法读取：{source.startsWith("data:") ? alt || "已保存的图片" : source}</span>
       : isRemote && remotePolicy === "block" ? <span className="image-placeholder remote-image-consent">远程图片已阻止<small>{host}</small></span>
       : isRemote && !remoteAllowed ? <span className="image-placeholder remote-image-consent">此文档引用了远程图片<small>{host}</small><span><button onClick={() => setAllowOnce(true)}>仅加载这张</button><button onClick={() => onAllowRemoteHost(host)}>始终允许此站点</button></span></span>
       : <span className="image-placeholder">图片加载中…</span>}
@@ -183,6 +189,7 @@ function CollapsibleCodeBlock({ children, language, lines, wide }: { children: R
   const [collapsed, setCollapsed] = useState(false);
   const label = language || "代码";
   useEffect(() => { const expand = () => setCollapsed(false); window.addEventListener("jingreader:expand-for-print", expand); return () => window.removeEventListener("jingreader:expand-for-print", expand); }, []);
+  useEffect(() => { const expand = () => setCollapsed(false); window.addEventListener("jingreader:expand-for-find", expand); return () => window.removeEventListener("jingreader:expand-for-find", expand); }, []);
   return <div className={`code-block ${wide ? "is-wide" : ""} ${lines <= 3 ? "is-short" : ""} ${collapsed ? "is-collapsed" : ""}`}>
     <div className="code-block-toolbar"><span><Code2 />{label}<small>{lines} 行</small></span><button type="button" onClick={() => setCollapsed((value) => !value)} aria-expanded={!collapsed} title={collapsed ? "展开代码块" : "折叠代码块"}>{collapsed ? <ChevronRight /> : <ChevronDown />}{collapsed ? "展开" : "折叠"}</button></div>
     {!collapsed && <pre role="region" aria-label={`${label}代码，可横向滚动`} tabIndex={0}>{children}</pre>}
@@ -385,7 +392,33 @@ type Props = {
   allowedRemoteHosts?: string[];
   onAllowRemoteHost?: (host: string) => void;
   onOpenDocument: (path: string, hash?: string) => void;
+  onError?: (message: string) => void;
 };
+
+function NotebookOutputFrame({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [long, setLong] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    const measure = () => setLong((ref.current?.scrollHeight ?? 0) > 360);
+    const observer = new ResizeObserver(measure);
+    if (ref.current) observer.observe(ref.current);
+    measure();
+    const expand = () => setExpanded(true);
+    window.addEventListener("jingreader:expand-for-print", expand);
+    return () => { observer.disconnect(); window.removeEventListener("jingreader:expand-for-print", expand); };
+  }, []);
+  return <div className="notebook-output" data-find-exclude="">
+    <div ref={ref} className={expanded ? "" : "notebook-output-preview"}>{children}</div>
+    {long && <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "收起输出" : "展开完整输出"}</button>}
+  </div>;
+}
+
+function remarkAttachments() {
+  return (tree: Root) => visit(tree, node => {
+    if ((node.type === "image" || node.type === "definition") && node.url.startsWith("attachment:")) node.url = `#attachment-${encodeURIComponent(node.url.slice(11))}`;
+  });
+}
 
 export function isLongDocument(content: string): boolean {
   return content.length >= 80_000 || content.split("\n", 4_001).length > 4_000;
@@ -398,17 +431,22 @@ export function documentRenderTier(content: string): "normal" | "long" | "extrem
 
 export default function MarkdownReader({
   document: doc, night, showFrontmatter = true, remoteImagePolicy = "ask", allowedRemoteHosts = [],
-  onAllowRemoteHost = () => undefined, onOpenDocument
+  onAllowRemoteHost = () => undefined, onOpenDocument, onError
 }: Props) {
-  const renderTier = useMemo(() => documentRenderTier(doc.content), [doc.content]);
+  const notebook = useMemo<{ data?: Notebook; error?: string } | null>(() => {
+    if (!isNotebook(doc.path)) return null;
+    try { return { data: parseNotebook(doc.content) }; }
+    catch (error) { return { error: String(error instanceof Error ? error.message : error) }; }
+  }, [doc.path, doc.content]);
+  const renderTier = useMemo(() => documentRenderTier(notebook?.data ? notebook.data.cells.map(cell => cell.source).join("\n") : doc.content), [doc.content, notebook]);
   const loadMargin = renderTier === "extreme" ? "80px" : "500px";
   const parsed = useMemo(() => {
-    return prepareFileHighlights(doc.content);
-  }, [doc.content]);
+    return prepareFileHighlights(notebook ? "" : doc.content);
+  }, [doc.content, notebook]);
   const components = useMemo<Components>(() => ({
     pre: ({ children }) => <MarkdownPre>{children}</MarkdownPre>,
     table: ({ children }) => <ScrollableTable>{children}</ScrollableTable>,
-    img: ({ src, alt }) => src ? <LocalImage key={imageSizeKey(doc.path, src)} documentPath={doc.path} source={src} alt={alt} remotePolicy={remoteImagePolicy} allowedRemoteHosts={allowedRemoteHosts} onAllowRemoteHost={onAllowRemoteHost} loadMargin={loadMargin} /> : null,
+    img: ({ src, alt, node }) => src ? <LocalImage key={imageSizeKey(doc.path, src)} documentPath={doc.path} source={src} alt={alt} inline={node?.properties?.dataImageLayout === "inline"} remotePolicy={remoteImagePolicy} allowedRemoteHosts={allowedRemoteHosts} onAllowRemoteHost={onAllowRemoteHost} loadMargin={loadMargin} /> : null,
     blockquote: ({ children, node }) => <CalloutBlock calloutKind={String(node?.properties?.dataCallout ?? "")}>{children}</CalloutBlock>,
     h1: ({ id, children }) => <CollapsibleHeading level={1} id={id}>{children}</CollapsibleHeading>,
     h2: ({ id, children }) => <CollapsibleHeading level={2} id={id}>{children}</CollapsibleHeading>,
@@ -428,7 +466,9 @@ export default function MarkdownReader({
           requestAnimationFrame(() => requestAnimationFrame(() => target.scrollIntoView({ behavior: "smooth" })));
         }
       }
-      else if (isExternalUrl(href)) void openUrl(href);
+      else if (isExternalUrl(href)) void openUrl(href).catch((error: unknown) => {
+        onError?.(`无法打开链接：${error instanceof Error ? error.message : String(error)}`);
+      });
       else {
         const [source, hash] = href.split("#");
         onOpenDocument(resolveLocalPath(doc.path, source), hash);
@@ -442,7 +482,7 @@ export default function MarkdownReader({
       if (!className) return <code>{children}</code>;
       return <LazyCode language={language} value={value} loadMargin={loadMargin} />;
     }
-  }), [allowedRemoteHosts, doc.path, loadMargin, onAllowRemoteHost, onOpenDocument, remoteImagePolicy, renderTier]);
+  }), [allowedRemoteHosts, doc.path, loadMargin, onAllowRemoteHost, onOpenDocument, onError, remoteImagePolicy, renderTier]);
 
   const markdown = useMemo(() => <ReactMarkdown
     remarkPlugins={[...markdownPlugins, parsed.plugin]}
@@ -450,8 +490,48 @@ export default function MarkdownReader({
     components={components}
   >{parsed.body}</ReactMarkdown>, [components, parsed]);
 
+  const notebookCells = useMemo(() => notebook?.data ? notebookHighlightCells(notebook.data.cells) : [], [notebook]);
+  const notebookContent = useMemo(() => notebook ? notebook.error ? <p role="alert">{notebook.error}</p> : <>
+      <p className="notebook-notice" data-find-exclude="">静态阅读 · Markdown 正文可高亮 · 代码与输出只读</p>
+      {notebook.data!.cells.map((cell, index) => {
+        const image = (source: string, alt: string) => <LocalImage documentPath={doc.path} source={source} alt={alt} inline={false} remotePolicy={remoteImagePolicy} allowedRemoteHosts={allowedRemoteHosts} onAllowRemoteHost={onAllowRemoteHost} loadMargin={loadMargin} />;
+        const prepared = cell.type === "markdown" ? prepareNotebookCell(notebookCells[index]!) : null;
+        if (prepared) return <ReactMarkdown key={index}
+          remarkPlugins={[...markdownPlugins.filter(plugin => plugin !== remarkHeadingIds), [remarkHeadingIds, { prefix: `nb-${index}-` }], remarkAttachments, prepared.plugin]}
+          rehypePlugins={htmlPlugins} components={{ ...components, a: props => {
+            let href = props.href;
+            if (href?.startsWith("#")) {
+              let hash = href.slice(1);
+              try { hash = decodeURIComponent(hash); } catch { /* Keep malformed fragments inert. */ }
+              const headings = notebookOutline(notebook.data!);
+              const target = headings.find(h => h.id === `user-content-nb-${index}-${hash}`)
+                ?? headings.find(h => h.id.replace(/^user-content-nb-\d+-/, "") === hash);
+              if (target) href = `#${target.id}`;
+            }
+            return components.a ? createElement(components.a, { ...props, href }) : null;
+          }, img: props => {
+            if (!props.src?.startsWith("#attachment-")) return components.img ? createElement(components.img, props) : null;
+            const name = decodeURIComponent(props.src.slice(12));
+            const source = notebookImage(cell.attachments[name]);
+            return source ? image(source, props.alt || name) : <span>此附件暂不支持或已损坏：{name}</span>;
+          } }}>{prepared.body}</ReactMarkdown>;
+        if (cell.type === "raw") return <pre key={index} className="notebook-raw" data-find-exclude="">{cell.source}</pre>;
+        if (cell.type !== "code") return <p key={index} data-find-exclude="">此单元格暂不支持</p>;
+        return <section className="notebook-code-cell" key={index}>
+          <CollapsibleCodeBlock language={notebook.data!.language} lines={cell.source.split("\n").length} wide={false}>
+            <LazyCode language={notebook.data!.language} value={cell.source} loadMargin={loadMargin} />
+          </CollapsibleCodeBlock>
+          {cell.outputs.length ? cell.outputs.map((output, outputIndex) => <NotebookOutputFrame key={outputIndex}>
+            {output.kind === "image" ? image(output.value, "已保存的图片输出") : output.kind === "html"
+              ? <ReactMarkdown rehypePlugins={htmlPlugins} components={{ table: components.table }}>{output.value}</ReactMarkdown>
+              : output.kind === "text" ? <pre>{output.value}</pre> : <p className="notebook-notice">{output.value}</p>}
+          </NotebookOutputFrame>) : <p className="notebook-notice" data-find-exclude="">未保存输出</p>}
+        </section>;
+      })}
+    </> : null, [notebook, notebookCells, components, doc.path, remoteImagePolicy, allowedRemoteHosts, onAllowRemoteHost, loadMargin]);
+
   return <ReaderNightContext.Provider value={night}><article className={`markdown-body ${renderTier !== "normal" ? "long-document" : ""} ${renderTier === "extreme" ? "extreme-document" : ""}`} data-render-tier={renderTier} data-document-path={doc.path}>
     {showFrontmatter && parsed.frontmatter.length > 0 && <details className="frontmatter"><summary>文档属性</summary>{parsed.frontmatter.map((line, index) => <div key={index}>{line}</div>)}</details>}
-    {markdown}
+    {notebook ? notebookContent : markdown}
   </article></ReaderNightContext.Provider>;
 }

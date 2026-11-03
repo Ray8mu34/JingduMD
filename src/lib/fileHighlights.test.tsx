@@ -2,12 +2,67 @@ import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
-import { fileHighlightRecords, migrateLegacyHighlights, parseFileHighlights, prepareFileHighlights, serializeFileHighlights, sourceSelection, coalesceFileHighlights, matchingFileHighlight } from "./fileHighlights";
+import { fileHighlightRecords, migrateLegacyHighlights, parseFileHighlights, prepareFileHighlights, serializeFileHighlights, sourceSelection, sourceSelections, coalesceFileHighlights, matchingFileHighlight } from "./fileHighlights";
+import { articleTextMap, rangeForOffsets, selectionToHighlight } from "./highlights";
 import MarkdownReader from "../components/MarkdownReader";
 import type { TextHighlight } from "../types";
 
 const legacy = (quote: string, id = 1): TextHighlight => ({ id, quote, prefix: "", suffix: "", path: "a.md", root: "", color: "green", startOffset: 0, endOffset: quote.length, headingId: null, createdMs: 0, updatedMs: 0 });
 describe("Markdown source highlights", () => {
+  it.each(["\n", "\r\n"])("maps indented list prose from the reported paragraph (%j)", (newline) => {
+    const quote = "在实践中可能看见这么一种经验做法：使用一个固定的学习率来进行训练的同时观察验证集错误率，每当验证集错误率停止下降，就乘以一个常数（比如0.5）来降低学习率";
+    const source = `- **随步数衰减**${newline}  ：每进行几个周期降低学习率。${quote}。${newline}- **指数衰减**${newline}  数学公式是 $x$。`;
+    const document = { path: "a.md", content: source, name: "a.md", modifiedMs: 0, size: 0 };
+    const view = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
+    const root = view.container.querySelector<HTMLElement>(".markdown-body")!;
+    const map = articleTextMap(root), start = map.text.indexOf(quote);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges(); selection.addRange(rangeForOffsets(map,start,start+quote.length)!);
+    const draft = selectionToHighlight(root,selection,"a.md","yellow")!;
+    expect(draft.sourceRange).toEqual({start:source.indexOf(quote),end:source.indexOf(quote)+quote.length});
+    const content = serializeFileHighlights(source,draft.sourceRanges!.map((part,id)=>({...part,id,color:"yellow"})));
+    expect(content).toBe(source.replace(quote,`==🟡${quote}==`));
+    expect(parseFileHighlights(content).clean).toBe(source);
+    view.rerender(<MarkdownReader document={{...document,content}} night={false} onOpenDocument={() => {}} />);
+    expect(view.container.querySelector(".file-highlight-yellow")?.textContent).toBe(quote);
+    selection.removeAllRanges(); view.unmount();
+  });
+  it("preserves quote prefixes when selecting across continued lines", () => {
+    const source = "> 第一行\r\n> 第二行文字。";
+    const view = render(<MarkdownReader document={{path:"a.md",content:source,name:"a.md",modifiedMs:0,size:0}} night={false} onOpenDocument={()=>{}} />);
+    const root=view.container.querySelector<HTMLElement>(".markdown-body")!;
+    const range=document.createRange(); range.selectNodeContents(root.querySelector("p")!);
+    const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range);
+    const parts=sourceSelections(root,selection);
+    const content=serializeFileHighlights(source,parts.map((part,id)=>({...part,id,color:"blue"})));
+    expect(content).toBe("> ==🔵第一行==\r\n> ==🔵第二行文字。==");
+    expect(parseFileHighlights(content).clean).toBe(source);
+    selection.removeAllRanges();view.unmount();
+  });
+  it("highlights prose across formulas without changing their source", () => {
+    const source = "已知 $p(y)$ 和 \\(p(x \\mid y)\\)，也可以采样。";
+    const view = render(<MarkdownReader document={{ path: "a.md", content: source, name: "a.md", modifiedMs: 0, size: 0 }} night={false} onOpenDocument={() => {}} />);
+    const root = view.container.querySelector<HTMLElement>(".markdown-body")!;
+    const p = root.querySelector("p")!;
+    const selection = window.getSelection()!;
+    const range = document.createRange(); range.selectNodeContents(p);
+    selection.removeAllRanges(); selection.addRange(range);
+    const draft = selectionToHighlight(root, selection, "a.md", "blue")!;
+    expect(draft.sourceRanges).toHaveLength(3);
+    const output = serializeFileHighlights(source, draft.sourceRanges!.map((part, id) => ({ ...part, id, color: "blue" })));
+    expect(output).toBe("==🔵已知 ==$p(y)$==🔵 和 ==\\(p(x \\mid y)\\)==🔵，也可以采样。==");
+    expect(parseFileHighlights(output).clean).toBe(source);
+    // Endpoints inside a formula retain only the selected neighboring prose.
+    const formula = root.querySelector(".katex")!;
+    range.setStart(formula, 0); range.setEnd(p, p.childNodes.length);
+    selection.removeAllRanges(); selection.addRange(range);
+    expect(selectionToHighlight(root, selection, "a.md", "green")?.sourceRanges).toHaveLength(2);
+    range.selectNodeContents(formula);
+    selection.removeAllRanges(); selection.addRange(range);
+    expect(sourceSelections(root, selection)).toEqual([]);
+    selection.removeAllRanges();
+  });
   it("parses nested colors and restores the outer layer after deleting the inner", () => {
     const source = "==🟡ab==🔵cd==ef==";
     const parsed = parseFileHighlights(source);

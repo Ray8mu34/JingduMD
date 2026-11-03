@@ -130,7 +130,7 @@ export default function AnnotationManager({ root, onClose, onChooseFolder }: {
           <div className="annotation-quotes">{highlights.map((item) => <div key={item.id} className={`highlight-card color-${item.color}`}><p>{item.quote}</p>{tab === "trash" && <button disabled={busy} onClick={() => void run(async () => { await invoke("restore_highlight", { id: item.id }); setStatus("已恢复这条高亮。"); })}>恢复这一条</button>}</div>)}</div>
         </> : <p className="annotation-empty">摘录和颜色会保留在这里。导出备份后，换电脑也能导入找回。</p>}</div>
       </div>
-      <div className="annotation-status" role="status">{busy ? "正在处理，请稍候…" : status || "导出备份包含旧数据库标注和回收站。文件内高亮随 Markdown 保存；每次修改前的原文另存于应用数据目录 highlight-backups。"}</div>
+      <div className="annotation-status" role="status">{busy ? "正在处理，请稍候…" : status || "导出备份包含旧数据库标注和回收站。文件内高亮随 Markdown 保存，恢复记录由软件自动合并和清理。"}</div>
     </section>
   </div>;
 }

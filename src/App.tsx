@@ -1,3 +1,4 @@
+import { documentHighlights, documentHighlightRecords } from "./lib/notebookHighlights";
 import { isMac, primaryModifier, shortcutLabel } from "./lib/platform";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isTauri } from "@tauri-apps/api/core";
@@ -15,7 +16,12 @@ import FileTree from "./components/FileTree";
 import ResizableSidebar from "./components/ResizableSidebar";
 import { fitSidebars, READER_MIN, SIDEBAR_MAX, SIDEBAR_MIN } from "./lib/sidebarSizing";
 import { useSidebarWidths } from "./lib/useSidebarWidths";
+import { isNotebook, parseNotebook, notebookOutline, notebookBody } from "./lib/notebook";
 import MarkdownReader from "./components/MarkdownReader";
+import SourceEditor, { type SourceEditorHandle } from "./components/SourceEditor";
+import UnsavedChangesDialog from "./components/UnsavedChangesDialog";
+import { useSourceDraft } from "./lib/useSourceDraft";
+import type { LeaveGuard } from "./lib/sourceEditing";
 import SearchPanel from "./components/SearchPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import AnnotationManager, { type RecoveryReport } from "./components/AnnotationManager";
@@ -28,7 +34,7 @@ import {
 import { readerPresentation } from "./lib/readerPresentation";
 import { loadFontCatalog } from "./lib/fontCatalog";
 import { extractOutline } from "./lib/markdown";
-import { fileHighlightRecords, parseFileHighlights, serializeFileHighlights, migrateLegacyHighlights, matchingFileHighlight } from "./lib/fileHighlights";
+import { parseFileHighlights, migrateLegacyHighlights } from "./lib/fileHighlights";
 import { migratePreferences, resolveReadingStyle } from "./lib/readerPreferences";
 import { formatModifiedTime, readingMetrics } from "./lib/reading";
 import { captureTextAnchor, restoreTextAnchor, type TextAnchor } from "./lib/readingAnchor";
@@ -70,9 +76,9 @@ type HighlightsChanged = { path: string; source: string };
 type HighlightPopover = { x: number; y: number } & ({ draft: NewTextHighlight; highlight?: never } | { highlight: TextHighlight; draft?: never });
 
 export type ReaderSession = { root: string; path?: string; back: string[]; forward: string[] };
-type AppProps = { session?: ReaderSession; initialPath?: string; onSessionChange?: (session: ReaderSession) => void; onNewTab?: (path?: string, root?: string) => void; tabBar?: ReactNode; tabId?: string };
+type AppProps = { session?: ReaderSession; initialPath?: string; onSessionChange?: (session: ReaderSession) => void; onNewTab?: (path?: string, root?: string) => void; tabBar?: ReactNode; tabId?: string; registerLeaveGuard?: (guard: LeaveGuard | null) => void };
 
-export default function App({ session, initialPath, onSessionChange, onNewTab, tabBar, tabId = "primary" }: AppProps = {}) {
+export default function App({ session, initialPath, onSessionChange, onNewTab, tabBar, tabId = "primary", registerLeaveGuard }: AppProps = {}) {
   const invoke = useTabInvoke();
   const sessionReporter = useRef(onSessionChange);
   sessionReporter.current = onSessionChange;
@@ -158,14 +164,40 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   const pendingSearch = useRef("");
   const searchCaller = useRef<HTMLElement | null>(null);
   const documentGeneration = useRef(0);
+  const navigationPending = useRef(0);
   const userScrollGeneration = useRef(0);
   const positionState = useRef<{ path: string; generation: number; userGeneration: number; ready: boolean; readPending: boolean; readFailed: boolean; sameDocument: boolean; restoreTarget: ReadingPosition | null } | null>(null);
   const windowPositions = useRef(new Map<string, ReadingPosition>());
   const presentedPath = useRef<string | null>(null);
   const pendingAnchor = useRef<{ path: string; anchor: TextAnchor } | null>(null);
   const liveAnchor = useRef<{ path: string; generation: number; anchor: TextAnchor } | null>(null);
-  const outline = useMemo(() => doc ? extractOutline(parseFileHighlights(doc.content).clean) : [], [doc]);
-  const metrics = useMemo(() => doc ? readingMetrics(doc.content) : null, [doc]);
+  const notebook = useMemo(() => { if (!doc || !isNotebook(doc.path)) return null; try { return parseNotebook(doc.content); } catch { return null; } }, [doc]);
+  const notebookDocument = !!doc && isNotebook(doc.path);
+  const outline = useMemo(() => notebook ? notebookOutline(notebook) : doc && !isNotebook(doc.path) ? extractOutline(parseFileHighlights(doc.content).clean) : [], [doc]);
+  const metrics = useMemo(() => doc ? readingMetrics(notebook ? notebookBody(notebook) : isNotebook(doc.path) ? "" : doc.content) : null, [doc]);
+  const sourceEditor = useRef<SourceEditorHandle>(null);
+  const sourceTrigger = useRef<HTMLButtonElement>(null);
+  const source = useSourceDraft(invoke, (updated) => {
+    documentRef.current = updated;
+    setDoc(updated);
+    setDeletedHighlight(null);
+  });
+  const leaveSource = source.leave;
+  const sourceCurrent = source.current;
+  const checkSourceExternal = source.checkExternal;
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.inert = !!source.draft;
+  }, [!!source.draft, doc?.path]);
+  useLayoutEffect(() => {
+    registerLeaveGuard?.(leaveSource);
+    return () => registerLeaveGuard?.(null);
+  }, [registerLeaveGuard, leaveSource]);
+  useEffect(() => {
+    if (!source.dirty && !source.draft?.busy) return;
+    const unload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", unload);
+    return () => window.removeEventListener("beforeunload", unload);
+  }, [source.dirty, source.draft?.busy]);
 
   const preserveAnchor = useCallback(() => {
     if (positionState.current) positionState.current.restoreTarget = null;
@@ -193,6 +225,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     else setShowTree((open) => focusMode || !open);
   }, [focusMode, narrow, preserveAnchor]);
   const toggleOutline = useCallback(() => {
+    if (sourceCurrent.current) return;
     preserveAnchor(); setRightTab("outline");
     setFocusMode(false);
     if (narrow) { setNarrowOutlineOpen((open) => focusMode || !open); setNarrowTreeOpen(false); }
@@ -252,7 +285,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     if (!isTauri()) return;
     try {
       const [current, recent] = await Promise.all([
-        path ? invoke<TextHighlight[]>("list_document_highlights", { path }) : Promise.resolve([]),
+        path && !isNotebook(path) ? invoke<TextHighlight[]>("list_document_highlights", { path }) : Promise.resolve([]),
         rootRef.current ? invoke<TextHighlight[]>("list_recent_highlights", { limit: 80 }) : Promise.resolve([])
       ]);
       if (!path || documentRef.current?.path === path) setHighlights(current);
@@ -261,17 +294,24 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   }, [notify]);
 
   const highlightWritePending = useRef(false);
+  useEffect(() => {
+    // File-backed marker IDs are rebuilt when source changes; an old popover
+    // must not recolor a different marker after an external edit/reorder.
+    setHighlightPopover(null);
+    selectionDraft.current = null;
+  }, [doc?.content]);
   async function saveFileHighlights(current: DocumentPayload, content: string, migratedIds: number[] = []) {
+    if (sourceCurrent.current) throw new Error("请先返回阅读，再修改高亮。");
     if (highlightWritePending.current) throw new Error("正在保存高亮，请稍候再操作。");
     highlightWritePending.current = true;
     try {
-      const result = await invoke<{ content: string; backupPath: string }>("write_file_highlights", {
+      const result = await invoke<{ content: string; backupPath: string; revision: string }>("write_file_highlights", {
         path: current.path, expected: current.content, content, migratedIds,
         migratedRecords: highlights.filter((h) => migratedIds.includes(h.id))
       });
       if (documentRef.current?.path === current.path) {
         preserveAnchor();
-        const updated = { ...current, content: result.content, modifiedMs: Date.now() };
+        const updated = { ...current, content: result.content, revision: result.revision, modifiedMs: Date.now() };
         documentRef.current = updated;
         setDoc(updated);
       }
@@ -282,13 +322,14 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   const createHighlight = useCallback(async (draft: NewTextHighlight, color: HighlightColor) => {
     try {
       const current = documentRef.current;
-      if (!current || current.path !== draft.path || !draft.sourceRange) throw new Error("这个选区包含公式、代码或无法对应原文的内容，请只选择正文文字。");
+      if (!current || current.path !== draft.path || !draft.sourceRange) throw new Error("选区中没有可高亮的正文文字；公式、代码等内容会自动跳过。");
       if (draft.sourceContent !== current.content) throw new Error("文章已变化，请重新选择文字。");
-      const { clean, ranges } = parseFileHighlights(current.content);
-      const existing = matchingFileHighlight(clean, ranges, draft.sourceRange);
+      const model = documentHighlights(current.content, current.path);
+      const { ranges } = model;
+      const existing = model.matching(draft.sourceRange);
       if (existing) existing.color = color;
-      else ranges.push({ id: -Date.now(), ...draft.sourceRange, color });
-      await saveFileHighlights(current, serializeFileHighlights(clean, ranges));
+      else ranges.push(...(draft.sourceRanges ?? [draft.sourceRange]).map((part, i) => ({ id: -Date.now() - i, ...part, color })));
+      await saveFileHighlights(current, model.serialize(ranges));
       globalThis.getSelection()?.removeAllRanges();
       selectionDraft.current = null;
       setHighlightPopover(null);
@@ -301,11 +342,12 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
       if (id < 0) {
         const current = documentRef.current;
         if (!current || current.path !== path) throw new Error("请重新打开文章后再改色。");
-        const { clean, ranges } = parseFileHighlights(current.content);
+        const model = documentHighlights(current.content, current.path);
+        const { ranges } = model;
         const range = ranges.find((r) => r.id === id);
         if (!range) throw new Error("高亮已变化，请重新选择。");
         range.color = color;
-        await saveFileHighlights(current, serializeFileHighlights(clean, ranges));
+        await saveFileHighlights(current, model.serialize(ranges));
       } else {
         // Editing a legacy mark writes it to the source immediately.
         const current = documentRef.current;
@@ -326,9 +368,10 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
       let before: string | undefined, after: string | undefined;
       if (id < 0) {
         if (!current || current.path !== path) throw new Error("请重新打开文章后再删除。");
-        const { clean, ranges } = parseFileHighlights(current.content);
+        const model = documentHighlights(current.content, current.path);
+        const { ranges } = model;
         before = current.content;
-        after = serializeFileHighlights(clean, ranges.filter((r) => r.id !== id));
+        after = model.serialize(ranges.filter((r) => r.id !== id));
         await saveFileHighlights(current, after);
       } else await invoke("delete_text_highlight", { id });
       setHighlightPopover(null);
@@ -342,7 +385,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     try {
       if (deletedHighlight.before !== undefined) {
         const current = await invoke<DocumentPayload>("read_document", { path: deletedHighlight.path });
-        if (current.content !== deletedHighlight.after) throw new Error("删除后文章已变化，无法直接撤销。原文仍保存在高亮备份中。");
+        if (current.content !== deletedHighlight.after) throw new Error("删除后文章已变化，无法直接撤销，请重新选择需要高亮的文字。");
         await saveFileHighlights(current, deletedHighlight.before);
       } else await invoke("restore_highlight", { id: deletedHighlight.id });
       setDeletedHighlight(null);
@@ -475,7 +518,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     userScrollGeneration.current++;
     if (positionState.current && !positionState.current.readFailed) { positionState.current.ready = true; positionState.current.restoreTarget = null; }
     window.dispatchEvent(new CustomEvent("jingreader:reveal-heading", { detail: target }));
-    requestAnimationFrame(() => requestAnimationFrame(() => target.scrollIntoView({ behavior: "smooth" })));
+    requestAnimationFrame(() => requestAnimationFrame(() => target.scrollIntoView({ behavior: documentRef.current && isNotebook(documentRef.current.path) ? "instant" : "smooth" })));
   }, []);
 
   const persistPosition = useCallback((path: string) => {
@@ -540,6 +583,8 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   }, [notify, updateReadingTelemetry]);
 
   const loadDocument = useCallback(async (path: string, hash?: string, recordHistory = true) => {
+    if (!await leaveSource()) return;
+    navigationPending.current++;
     try {
       setRestoredPath(null);
       const current = documentRef.current;
@@ -561,7 +606,8 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
       document.title = `${payload.name} · 静读 Markdown`;
       window.setTimeout(() => void restorePosition(payload.path, generation, hash), 0);
     } catch (error) { notify(`无法打开文档：${errorText(error)}`); }
-  }, [notify, persistPosition, preserveAnchor, restorePosition]);
+    finally { navigationPending.current--; }
+  }, [leaveSource, notify, persistPosition, preserveAnchor, restorePosition]);
 
   const openDocument = useCallback((path: string, hash?: string) => {
     if (narrow) setNarrowTreeOpen(false);
@@ -572,7 +618,8 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     void invoke("open_in_new_window", { path }).catch((error) => notify(`无法新建阅读窗口：${errorText(error)}`));
   }, [notify]);
 
-  const navigateHistory = useCallback((direction: "back" | "forward") => {
+  const navigateHistory = useCallback(async (direction: "back" | "forward") => {
+    if (!await leaveSource()) return;
     const source = direction === "back" ? backHistory : forwardHistory;
     const destination = direction === "back" ? forwardHistory : backHistory;
     const next = source.current.pop();
@@ -581,7 +628,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     if (current) destination.current.push(current.path);
     setHistoryVersion((value) => value + 1);
     void loadDocument(next, undefined, false);
-  }, [loadDocument]);
+  }, [leaveSource, loadDocument]);
 
   const applyResolvedTarget = useCallback(async (target: OpenTarget, initializeBackground = true) => {
     try {
@@ -607,10 +654,13 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   }, [loadDocument, notify, persistPosition, refreshRecentRoots]);
 
   const applyTarget = useCallback(async (path: string) => {
+    if (!await leaveSource()) return;
+    navigationPending.current++;
     try {
       await applyResolvedTarget(await invoke<OpenTarget>("open_target", { path }));
     } catch (error) { notify(`无法打开：${errorText(error)}`); }
-  }, [applyResolvedTarget, notify]);
+    finally { navigationPending.current--; }
+  }, [applyResolvedTarget, leaveSource, notify]);
 
   const chooseFolder = useCallback(async () => {
     const selected = await open({ directory: true, multiple: false, title: "选择 Markdown 文件夹" });
@@ -621,7 +671,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   }, [applyTarget, narrow]);
 
   const chooseFile = useCallback(async () => {
-    const selected = await open({ directory: false, multiple: false, title: "打开 Markdown 文件", filters: [{ name: "Markdown", extensions: ["md", "markdown"] }] });
+    const selected = await open({ directory: false, multiple: false, title: "打开阅读文件", filters: [{ name: "Markdown / Notebook", extensions: ["md", "markdown", "ipynb"] }] });
     if (typeof selected === "string") { if (narrow) setNarrowTreeOpen(false); if (onNewTab && doc) onNewTab(selected); else await applyTarget(selected); }
   }, [applyTarget, narrow, onNewTab, doc]);
 
@@ -636,13 +686,22 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     if (!isTauri()) return;
     let active = true;
     const appWindow = getCurrentWindow();
-    const listener = appWindow.onCloseRequested(async () => {
+    let closing = false;
+    const listener = appWindow.onCloseRequested(async (event) => {
       if (!active) return;
-      window.clearTimeout(saveTimer.current);
-      if (documentRef.current) await persistPosition(documentRef.current.path);
+      event.preventDefault();
+      if (closing) return;
+      closing = true;
+      try {
+        if (!await leaveSource()) return;
+        window.clearTimeout(saveTimer.current);
+        if (documentRef.current) await persistPosition(documentRef.current.path);
+        await appWindow.destroy();
+      } catch (error) { notify(`无法关闭窗口：${errorText(error)}`); }
+      finally { closing = false; }
     });
     return () => { active = false; void listener.then((unlisten) => unlisten()); };
-  }, [persistPosition]);
+  }, [leaveSource, notify, persistPosition]);
 
   useEffect(() => { documentRef.current = doc; }, [doc]);
 
@@ -652,7 +711,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     setHighlights([]);
     setResolvedHighlights([]);
     clearTextHighlights();
-    if (doc) void refreshHighlights(doc.path);
+    if (doc && !isNotebook(doc.path)) void refreshHighlights(doc.path);
   }, [doc?.path, refreshHighlights]);
 
   useEffect(() => {
@@ -662,7 +721,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
       frame = 0;
       if (cancelled) return;
       const article = scrollRef.current?.querySelector<HTMLElement>(".markdown-body");
-      const native = doc ? fileHighlightRecords(doc.content, doc.path, rootRef.current ?? "") : [];
+      const native = doc ? documentHighlightRecords(doc.content, doc.path, rootRef.current ?? "") : [];
       const resolved = article ? resolveHighlights(article, [...highlights, ...native]) : [];
       setResolvedHighlights(resolved);
       paintHighlights(resolved);
@@ -728,7 +787,14 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
         return unlisten;
       }),
       listen<IndexStatus & { scope?: string }>("index-status", ({ payload }) => { if (payload.root === rootRef.current && (!payload.scope || payload.scope === scopeLabel)) setIndexStatus(payload); }),
-      listen<string>("tree-changed", ({ payload }) => { if (payload === rootRef.current) setTreeVersion((value) => value + 1); }),
+      listen<string>("tree-changed", ({ payload }) => {
+        if (payload !== rootRef.current) return;
+        setTreeVersion((value) => value + 1);
+        // Directory reconciliation (e.g. images created beside a save) can
+        // coalesce per-file watch events into a tree update. Check the private
+        // baseline here too, without replacing the draft or reloading it.
+        if (sourceCurrent.current) void checkSourceExternal();
+      }),
       listen<PreferencesChanged>("preferences-updated", ({ payload }) => {
         if (payload.source === scopeLabel) return;
         preserveAnchor();
@@ -743,12 +809,22 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
       }),
       listen<ExternalChangeEvent>("external-change", ({ payload }) => {
         if (documentRef.current?.path === payload.path) {
-          void loadDocument(payload.path, undefined, false).then(() => notify("文件已在外部更新"));
+          if (sourceCurrent.current) { void checkSourceExternal(); return; }
+          const generation = documentGeneration.current;
+          void invoke<DocumentPayload>("read_document", { path: payload.path }).then((disk) => {
+            if (sourceCurrent.current) { void checkSourceExternal(); return; }
+            const current = documentRef.current;
+            if (generation !== documentGeneration.current || current?.path !== disk.path) return;
+            // File watchers also report our own atomic saves. Equal saved
+            // bytes are not an external update and need no reader reload.
+            if (disk.revision === current.revision && disk.content === current.content) return;
+            void loadDocument(payload.path, undefined, false).then(() => notify("文件已在外部更新"));
+          }).catch(() => { /* a subsequent open reports missing/unreadable files */ });
         }
       })
     ];
     return () => { active = false; cleanups.forEach((promise) => void promise.then((fn) => fn())); };
-  }, [applyTarget, applyResolvedTarget, loadDocument, notify, preserveAnchor, refreshHighlights, scopeLabel]);
+  }, [applyTarget, applyResolvedTarget, checkSourceExternal, loadDocument, notify, preserveAnchor, refreshHighlights, scopeLabel, sourceCurrent]);
 
   useEffect(() => {
     if (!isTauri() || !preferencesReady) return;
@@ -769,12 +845,13 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   }, []);
 
   useNativeMenu((action) => {
+    if (source.asking) return;
     switch (action) {
       case "reader-open-file": void chooseFile(); break;
       case "reader-open-folder": void chooseFolder(); break;
       case "reader-open-in-new-window": if (doc) openDocumentInNewWindow(doc.path); break;
-      case "reader-export-pdf": if (doc) setPrintOptionsOpen(true); break;
-      case "reader-find": if (doc) setFindOpen(true); break;
+      case "reader-export-pdf": if (doc && !sourceCurrent.current) setPrintOptionsOpen(true); break;
+      case "reader-find": if (sourceCurrent.current) sourceEditor.current?.find(); else if (doc) setFindOpen(true); break;
       case "reader-search": if (root) openFolderSearch(); break;
       case "reader-settings": setSettingsSection("reading"); setSettingsOpen(true); break;
       case "reader-tree": if (root) toggleTree(); break;
@@ -785,6 +862,13 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      if (source.asking) return;
+      if (sourceCurrent.current && primaryModifier(event) && ["f", "s"].includes(event.key.toLowerCase())) {
+        event.preventDefault();
+        if (event.key.toLowerCase() === "f") sourceEditor.current?.find();
+        else void source.save();
+        return;
+      }
       if (annotationManagerOpen) return;
       if (isMac && event.metaKey && ["o", "p", "f", ",", "e", "d"].includes(event.key.toLowerCase())) return;
       if (event.altKey && event.key === "ArrowLeft") { event.preventDefault(); navigateHistory("back"); return; }
@@ -792,11 +876,11 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
       if (primaryModifier(event) && !event.shiftKey && event.key.toLowerCase() === "o") { event.preventDefault(); void chooseFile(); }
       if (primaryModifier(event) && event.key.toLowerCase() === "p") { event.preventDefault(); if (root) openFolderSearch(); }
       if (primaryModifier(event) && event.key.toLowerCase() === "f") { event.preventDefault(); setFindOpen(true); }
-      if (primaryModifier(event) && event.shiftKey && event.key.toLowerCase() === "d") { event.preventDefault(); setPrintOptionsOpen(true); }
-      if (primaryModifier(event) && event.shiftKey && event.key.toLowerCase() === "h") {
+      if (primaryModifier(event) && event.shiftKey && event.key.toLowerCase() === "d") { event.preventDefault(); if (!sourceCurrent.current) setPrintOptionsOpen(true); }
+      if (!sourceCurrent.current && primaryModifier(event) && event.shiftKey && event.key.toLowerCase() === "h") {
         event.preventDefault(); setRightTab("highlights"); if (narrow) setNarrowOutlineOpen(true); else setShowOutline(true);
       }
-      if (primaryModifier(event) && event.shiftKey && event.key.toLowerCase() === "m") { event.preventDefault(); captureHighlightSelection(true); }
+      if (!sourceCurrent.current && primaryModifier(event) && event.shiftKey && event.key.toLowerCase() === "m") { event.preventDefault(); captureHighlightSelection(true); }
       if (primaryModifier(event) && event.key === ",") { event.preventDefault(); setSettingsSection("reading"); setSettingsOpen(true); }
       if (primaryModifier(event) && event.shiftKey && event.key.toLowerCase() === "e") { event.preventDefault(); if (root) toggleTree(); }
       if (primaryModifier(event) && event.shiftKey && event.key.toLowerCase() === "o") { event.preventDefault(); if (doc) toggleOutline(); }
@@ -817,7 +901,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [annotationManagerOpen, chooseFile, closeFolderSearch, closeSettings, doc, findOpen, highlightPopover, moreOpen, narrow, narrowOutlineOpen, narrowTreeOpen, navigateHistory, openFolderSearch, openMenuOpen, printOptionsOpen, root, searchOpen, settingsOpen, toggleOutline, toggleTree]);
+  }, [annotationManagerOpen, chooseFile, closeFolderSearch, closeSettings, doc, findOpen, highlightPopover, moreOpen, narrow, narrowOutlineOpen, narrowTreeOpen, navigateHistory, openFolderSearch, openMenuOpen, printOptionsOpen, root, searchOpen, settingsOpen, source.asking, source.save, sourceCurrent, toggleOutline, toggleTree]);
 
   useEffect(() => {
     clearFindHighlights();
@@ -826,6 +910,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
       setFindIndex(0);
       return;
     }
+    if (isNotebook(doc.path)) window.dispatchEvent(new Event("jingreader:expand-for-find"));
     const timer = window.setTimeout(() => {
       const article = scrollRef.current?.querySelector<HTMLElement>(".markdown-body");
       const matches = article ? findTextRanges(article, findQuery) : [];
@@ -860,7 +945,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     const selection = globalThis.getSelection();
     if (!article || !selection || selection.isCollapsed) { selectionDraft.current = null; return; }
     const draft = selectionToHighlight(article, selection, doc.path, "yellow");
-    if (!draft) { selectionDraft.current = null; return; }
+    if (!draft || isNotebook(doc.path) && !draft.sourceRange) { selectionDraft.current = null; return; }
     draft.sourceContent = doc.content;
     const rect = selection.getRangeAt(0).getBoundingClientRect();
     const popover = {
@@ -919,12 +1004,12 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   const { style: readerStyle } = presentation;
   const sidebarsHidden = focusMode;
   const treeVisible = !sidebarsHidden && (narrow ? narrowTreeOpen : showTree) && !!root;
-  const outlineVisible = !sidebarsHidden && (narrow ? narrowOutlineOpen : showOutline) && !!doc;
+  const outlineVisible = !source.draft && !sidebarsHidden && (narrow ? narrowOutlineOpen : showOutline) && !!doc;
   const fitted = narrow ? { left: treeWidth, right: outlineWidth }
     : fitSidebars(viewportWidth, treeVisible ? treeWidth : 0, outlineVisible ? outlineWidth : 0);
   const treeMax = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX.left, narrow ? Math.floor(viewportWidth * .82) : viewportWidth - READER_MIN - fitted.right));
   const outlineMax = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX.right, narrow ? Math.floor(viewportWidth * .82) : viewportWidth - READER_MIN - fitted.left));
-  const modalOpen = searchOpen || printOptionsOpen || annotationManagerOpen;
+  const modalOpen = searchOpen || printOptionsOpen || annotationManagerOpen || source.asking;
   useEffect(() => {
     if (topbarRef.current) topbarRef.current.inert = modalOpen;
     if (workspaceRef.current) workspaceRef.current.inert = modalOpen;
@@ -953,15 +1038,21 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
         </div>
       </div>
       <div className="document-title" data-tauri-drag-region title={doc?.path}>{doc?.name ?? (root ? rootName(root) : "静读 Markdown")}</div>
+      {doc && !notebookDocument && !source.draft && <button ref={sourceTrigger} className="toolbar-action" title="编辑 Markdown 源码" onClick={() => {
+        if (navigationPending.current) { notify("正在打开文档，请完成后再进入源码。"); return; }
+        if (highlightWritePending.current) { notify("正在保存高亮，请稍后进入源码。"); return; }
+        preserveAnchor(); setFindOpen(false); clearFindHighlights(); setHighlightPopover(null); setDeletedHighlight(null);
+        source.begin(doc);
+      }}><TerminalSquare /><span>源码</span></button>}
       {indexStatus?.running && <div className="index-progress"><span>{indexStatus.phase === "rebuild" ? "重建" : "索引"} {indexStatus.indexed}/{indexStatus.total || "?"}</span><button onClick={() => void invoke("cancel_index")} title="取消索引"><Ban /></button></div>}
-      <button disabled={!doc} onClick={() => setFindOpen(true)} title={shortcutLabel("在当前文档中查找 (Ctrl+F)")} aria-label="在当前文档中查找"><Search /><span>查找</span></button>
-      <button ref={outlineTrigger} disabled={!doc} onClick={toggleOutline} aria-expanded={!sidebarsHidden && (narrow ? narrowOutlineOpen : showOutline)} title={shortcutLabel("大纲 (Ctrl+Shift+O)")} aria-label="大纲"><PanelRightClose /><span>大纲</span></button>
+      <button disabled={!doc} onClick={() => source.draft ? sourceEditor.current?.find() : setFindOpen(true)} title={shortcutLabel("在当前文档中查找 (Ctrl+F)")} aria-label="在当前文档中查找"><Search /><span>查找</span></button>
+      <button ref={outlineTrigger} disabled={!doc || !!source.draft} onClick={toggleOutline} aria-expanded={!sidebarsHidden && (narrow ? narrowOutlineOpen : showOutline)} title={shortcutLabel("大纲 (Ctrl+Shift+O)")} aria-label="大纲"><PanelRightClose /><span>大纲</span></button>
       <button ref={settingsTrigger} aria-label="阅读设置" aria-expanded={settingsOpen && settingsSection === "reading"} onClick={() => { if (settingsOpen && settingsSection === "reading") closeSettings("toggle"); else { if (settingsOpen) closeSettings("switch"); setSettingsSection("reading"); setSettingsOpen(true); setOpenMenuOpen(false); setMoreOpen(false); } }} title={shortcutLabel("阅读设置 (Ctrl+,)")}><Type /><span>排版</span></button>
       <button className="focus-toggle" disabled={!doc} aria-label={focusMode ? "退出专注阅读" : "专注阅读"} aria-pressed={focusMode} title={focusMode ? "退出专注阅读" : "专注阅读：隐藏两侧栏"} onClick={() => { preserveAnchor(); setFocusMode((value) => !value); }}><Focus /></button>
       <div className="toolbar-menu-wrap"><button ref={moreTrigger} aria-label="更多" aria-haspopup="menu" aria-controls="more-menu" aria-expanded={moreOpen} onClick={() => { if (settingsOpen) closeSettings("switch"); setMoreOpen((open) => !open); setOpenMenuOpen(false); }} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setMoreOpen(true); setOpenMenuOpen(false); } }}><MoreHorizontal /></button>{moreOpen && <div ref={moreMenu} id="more-menu" className="toolbar-menu" role="menu" aria-label="更多操作" onKeyDown={(event) => handleMenuKeys(event, (reason) => { setMoreOpen(false); if (reason === "escape") moreTrigger.current?.focus(); })}>
         <button role="menuitem" disabled={!doc} onClick={() => { if (doc) openDocumentInNewWindow(doc.path); setMoreOpen(false); }}><AppWindow />在新窗口打开</button>
-        <button role="menuitem" disabled={!doc} onClick={() => { setPrintOptionsOpen(true); setMoreOpen(false); }}><Printer />打印或导出 PDF</button>
-        <button role="menuitem" onClick={() => { setAnnotationManagerOpen(true); setMoreOpen(false); setHighlightPopover(null); }}><Highlighter />标注管理与备份</button>
+        <button role="menuitem" disabled={!doc || !!source.draft} onClick={() => { setPrintOptionsOpen(true); setMoreOpen(false); }}><Printer />打印或导出 PDF</button>
+        <button role="menuitem" disabled={!!source.draft} onClick={() => { setAnnotationManagerOpen(true); setMoreOpen(false); setHighlightPopover(null); }}><Highlighter />标注管理与备份</button>
         <button role="menuitem" onClick={() => { setFocusMode((value) => !value); setMoreOpen(false); }}><Focus />{focusMode ? "恢复两侧栏" : "隐藏两侧栏"}</button>
         <button role="menuitem" onClick={() => { setSettingsSection("system"); setSettingsOpen(true); setMoreOpen(false); }}><Database />应用设置</button>
         <button role="menuitem" onClick={() => { void getCurrentWindow().isFullscreen().then((yes) => getCurrentWindow().setFullscreen(!yes)); setMoreOpen(false); }}><Maximize2 />全屏</button>
@@ -977,7 +1068,10 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
 
     <main ref={workspaceRef} className="workspace" id={tabBar ? "reader-tab-panel" : undefined} role={tabBar ? "tabpanel" : undefined} aria-labelledby={tabBar ? `tab-${tabId}` : undefined}>
       {treeVisible && <ResizableSidebar ref={treeSidebar} side="left" width={Math.min(fitted.left, treeMax)} maxWidth={treeMax} overlay={narrow} onResize={(width) => { preserveAnchor(); setTreeWidth(width); }}><FileTree key={`${root}:${treeVersion}`} root={root} selected={doc?.path ?? null} onOpen={onNewTab ? (path) => onNewTab(path, root) : openDocument} onOpenNew={openDocumentInNewWindow} onSearch={openFolderSearch} onChooseFolder={() => void chooseFolder()} /></ResizableSidebar>}
-      <section className="reader-pane">
+      <section className={`reader-pane${source.draft ? " is-editing" : ""}`}>
+        {source.draft && <SourceEditor ref={sourceEditor} path={source.draft.baseline.path} initialContent={source.draft.original.content} dirty={source.dirty} busy={source.draft.busy} error={source.draft.error} external={source.draft.external}
+          onChange={source.change} onSave={() => void source.save()} onBusy={source.setBusy} onError={source.setError}
+          onExit={() => { const path = source.draft!.baseline.path; void leaveSource().then(async (allowed) => { if (allowed) { await loadDocument(path, undefined, false); requestAnimationFrame(() => sourceTrigger.current?.focus()); } }); }} />}
         {doc && restoredPath === doc.path && <div className="position-notice" role="status"><span>已回到上次阅读位置</span><button onClick={() => { preserveAnchor(); if (scrollRef.current) scrollRef.current.scrollTop = 0; pendingAnchor.current = null; setRestoredPath(null); }}>返回文首</button><button aria-label="关闭位置提示" onClick={() => setRestoredPath(null)}><X /></button></div>}
         {doc && <div className="reading-progress-track" aria-label={`阅读进度 ${Math.round(readingProgress * 100)}%`}><span style={{ width: `${readingProgress * 100}%` }} /></div>}
         {findOpen && <div className="find-bar">
@@ -987,8 +1081,8 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
           <button onClick={() => navigateFind(1)} disabled={!findMatches.length} title="下一个 (Enter)"><ChevronDown /></button>
           <button onClick={() => setFindOpen(false)} title="关闭"><X /></button>
         </div>}
-        {doc ? <div ref={scrollRef} className="reader-scroll" style={readerStyle} onScroll={() => { saveReadingPosition(); setHighlightPopover(null); }} onWheel={() => { userScrollGeneration.current++; }} onTouchStart={() => { userScrollGeneration.current++; }} onPointerDown={() => { userScrollGeneration.current++; }} onKeyDown={() => { userScrollGeneration.current++; }} onMouseUp={handleReaderMouseUp} onContextMenu={(event) => { if (!globalThis.getSelection()?.isCollapsed) { event.preventDefault(); captureHighlightSelection(true); } }}>
-          <MarkdownReader document={doc} night={presentation.night} showFrontmatter={preferences.showFrontmatter} remoteImagePolicy={preferences.remoteImagePolicy} allowedRemoteHosts={preferences.allowedRemoteHosts} onAllowRemoteHost={allowRemoteHost} onOpenDocument={openDocument} />
+        {doc ? <div ref={scrollRef} className="reader-scroll" aria-hidden={source.draft ? true : undefined} style={readerStyle} onScroll={() => { saveReadingPosition(); setHighlightPopover(null); }} onWheel={() => { userScrollGeneration.current++; }} onTouchStart={() => { userScrollGeneration.current++; }} onPointerDown={() => { userScrollGeneration.current++; }} onKeyDown={() => { userScrollGeneration.current++; }} onMouseUp={handleReaderMouseUp} onContextMenu={(event) => { if (!globalThis.getSelection()?.isCollapsed) { event.preventDefault(); captureHighlightSelection(true); } }}>
+          <MarkdownReader document={doc} night={presentation.night} showFrontmatter={preferences.showFrontmatter} remoteImagePolicy={preferences.remoteImagePolicy} allowedRemoteHosts={preferences.allowedRemoteHosts} onAllowRemoteHost={allowRemoteHost} onOpenDocument={openDocument} onError={notify} />
         </div> : <div className="welcome">
           {root ? <><h1>选择一篇文档</h1><p>{!sidebarsHidden && (narrow ? narrowTreeOpen : showTree) ? "从左侧选择一篇文档，开始阅读。" : "从文件列表中选择要阅读的 Markdown 文件。"}</p>{(sidebarsHidden || !(narrow ? narrowTreeOpen : showTree)) && <button className="primary" onClick={() => { setFocusMode(false); if (narrow) setNarrowTreeOpen(true); else setShowTree(true); }}>打开文件列表</button>}</>
             : <><h1>打开 Markdown 开始阅读</h1><div className="welcome-actions"><button className="primary" onClick={() => void chooseFile()}><FileText />打开文件</button><button onClick={() => void chooseFolder()}><FolderOpen />打开文件夹</button></div></>}
@@ -1002,7 +1096,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
           : <div className="highlights-panel">
             <button className="annotation-manage-button" onClick={() => { setHighlightPopover(null); setAnnotationManagerOpen(true); }}><Highlighter />找回、备份与回收站</button>
             <div className="highlight-section-title"><span>当前文档</span><small>{resolvedHighlights.filter((item) => !item.orphaned).length}/{resolvedHighlights.length}</small></div>
-            {!resolvedHighlights.length && <p className="highlight-empty">选中正文后即可添加高亮。标记随 Markdown 文件保存。</p>}
+            {!resolvedHighlights.length && <p className="highlight-empty">{notebookDocument ? "选中 Markdown 单元格正文即可添加高亮，标记随 notebook 文件保存。" : "选中正文后即可添加高亮。标记随 Markdown 文件保存。"}</p>}
             {resolvedHighlights.map((item) => <div key={item.id} className={`highlight-card color-${item.color} ${item.orphaned ? "orphaned" : ""}`}>
               <button className="highlight-quote" onClick={() => navigateToStoredHighlight(item)} title={item.orphaned ? "原文变化后已无法定位" : "跳转到高亮"}><span>{item.quote}</span>{item.orphaned && <small>待恢复</small>}</button>
               <div className="highlight-card-actions">{HIGHLIGHT_COLORS.map((color) => <button key={color} className={`highlight-color color-${color} ${item.color === color ? "active" : ""}`} title={`改为${HIGHLIGHT_COLOR_LABELS[color]}`} aria-label={`改为${HIGHLIGHT_COLOR_LABELS[color]}`} onClick={() => void changeHighlightColor(item.id, color, item.path)} />)}<button className="highlight-delete" title="删除高亮" aria-label="删除高亮" onClick={() => void deleteHighlight(item.id, item.path)}><Trash2 /></button></div>
@@ -1020,12 +1114,13 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
       <label className="switch-row"><input type="checkbox" checked={preferences.pdfIncludeHighlights} onChange={(event) => updatePreferences({ ...preferences, pdfIncludeHighlights: event.target.checked })} />保留文本高亮</label>
       <button className="primary" onClick={() => { setPrintOptionsOpen(false); void exportPdf(); moreTrigger.current?.focus(); }}><Printer />继续打印</button>
     </section></div>}
+    {source.asking && source.draft && <UnsavedChangesDialog name={source.draft.baseline.name} busy={source.draft.busy} error={source.draft.error} onSave={() => void source.saveAndLeave()} onDiscard={source.discard} onCancel={source.cancel} />}
     {annotationManagerOpen && <AnnotationManager root={root} onChooseFolder={() => void chooseFolder()} onClose={() => { setAnnotationManagerOpen(false); requestAnimationFrame(() => moreTrigger.current?.focus()); }} />}
     {highlightPopover && <HighlightToolbar x={highlightPopover.x} y={highlightPopover.y} color={highlightPopover.highlight?.color}
       onColor={(color) => { if (highlightPopover.highlight) void changeHighlightColor(highlightPopover.highlight.id, color, highlightPopover.highlight.path); else void createHighlight(highlightPopover.draft, color); }}
       onDelete={highlightPopover.highlight ? () => void deleteHighlight(highlightPopover.highlight!.id, highlightPopover.highlight!.path) : undefined}
       onClose={() => setHighlightPopover(null)} />}
-    {deletedHighlight && <div className="annotation-undo" role="status"><span>{deletedHighlight.before !== undefined ? "高亮已移除，原文已备份" : "高亮已移入回收站"}</span><button onClick={() => void undoHighlightDelete()}>撤销删除</button><button aria-label="关闭撤销提示" onClick={() => setDeletedHighlight(null)}><X /></button></div>}
+    {deletedHighlight && <div className="annotation-undo" role="status"><span>{deletedHighlight.before !== undefined ? "高亮已移除" : "高亮已移入回收站"}</span><button onClick={() => void undoHighlightDelete()}>撤销删除</button><button aria-label="关闭撤销提示" onClick={() => setDeletedHighlight(null)}><X /></button></div>}
     {message && <div className="toast">{message}</div>}
   </div>;
 }

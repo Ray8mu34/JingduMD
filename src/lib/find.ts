@@ -1,4 +1,4 @@
-const SKIP_SELECTOR = "script, style, noscript, .katex-mathml, [aria-hidden='true']";
+const SKIP_SELECTOR = "script, style, noscript, [data-find-exclude], .katex-mathml, [aria-hidden='true']";
 
 export function findTextRanges(root: HTMLElement, rawQuery: string): Range[] {
   const query = rawQuery.trim();

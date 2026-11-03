@@ -16,6 +16,22 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 describe("MarkdownReader mathematics", () => {
+  it.each(["https://example.test/article", "http://example.test/article", "mailto:reader@example.test"])("opens %s with the system handler", async (url) => {
+    const onOpenDocument = vi.fn();
+    const document: DocumentPayload = { path: "links.md", name: "links.md", modifiedMs: 0, size: 0, content: `[外部链接](${url})` };
+    const view = render(<MarkdownReader document={document} night={false} onOpenDocument={onOpenDocument} />);
+    fireEvent.click(view.getByRole("link", { name: "外部链接" }));
+    await waitFor(() => expect(openUrl).toHaveBeenCalledWith(url));
+    expect(onOpenDocument).not.toHaveBeenCalled();
+  });
+  it("reports an external link failure without an unhandled rejection", async () => {
+    vi.mocked(openUrl).mockRejectedValueOnce(new Error("URL denied"));
+    const onError = vi.fn();
+    const document: DocumentPayload = { path: "links.md", name: "links.md", modifiedMs: 0, size: 0, content: "[外部链接](https://example.test)" };
+    const view = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} onError={onError} />);
+    fireEvent.click(view.getByRole("link", { name: "外部链接" }));
+    await waitFor(() => expect(onError).toHaveBeenCalledWith("无法打开链接：URL denied"));
+  });
   it("lays out all ordinary-article formulas before viewport observation", () => {
     const observer = globalThis.IntersectionObserver;
     globalThis.IntersectionObserver = class { observe() {} disconnect() {} } as unknown as typeof IntersectionObserver;
@@ -197,6 +213,44 @@ describe("MarkdownReader mathematics", () => {
     fireEvent.click(badge);
     expect(openUrl).toHaveBeenCalledWith("https://example.test/build");
     expect(queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it.each(["\n", "  \n", "\\\n"])("keeps a figure with a caption after %j full-size", async (lineBreak) => {
+    const document: DocumentPayload = {
+      path: "figures.md", name: "figures.md", modifiedMs: 0, size: 0,
+      content: `![Figure 2](https://images.example.test/figure.png)${lineBreak}Figure 2. Overview with $x^2$.`
+    };
+    const view = render(<MarkdownReader document={document} night={false} remoteImagePolicy="allow" onOpenDocument={() => {}} />);
+    const img = await view.findByAltText("Figure 2");
+    expect(img.closest(".image-frame")).toHaveClass("image-block");
+    expect(img.closest("p")).toHaveTextContent("Figure 2. Overview");
+    fireEvent.click(view.getByTitle("调整显示大小"));
+    expect(view.getByRole("spinbutton")).toBeInTheDocument();
+  });
+
+  it("distinguishes inline icons and consecutive figure lines, including reference images", async () => {
+    const document: DocumentPayload = {
+      path: "mixed.md", name: "mixed.md", modifiedMs: 0, size: 0,
+      content: "正文 ![图标](https://images.example.test/icon.png) 后续。\n\n前文\n![第一图](https://images.example.test/first.png)\n![第二图][fig]\n图注\n\n[fig]: https://images.example.test/second.png"
+    };
+    const view = render(<MarkdownReader document={document} night={false} remoteImagePolicy="allow" onOpenDocument={() => {}} />);
+    expect((await view.findByAltText("图标")).closest(".image-frame")).toHaveClass("image-inline");
+    for (const alt of ["第一图", "第二图"]) expect((await view.findByAltText(alt)).closest(".image-frame")).toHaveClass("image-block");
+  });
+
+  it("closes preview from the empty canvas but keeps image and toolbar clicks open", async () => {
+    const document: DocumentPayload = { path: "preview.md", name: "preview.md", modifiedMs: 0, size: 0,
+      content: "![图](https://images.example.test/figure.png)" };
+    const view = render(<MarkdownReader document={document} night={false} remoteImagePolicy="allow" onOpenDocument={() => {}} />);
+    const img = await view.findByAltText("图");
+    fireEvent.click(img);
+    expect(view.getByTitle("关闭图片预览")).toHaveFocus();
+    fireEvent.click(view.getByRole("dialog").querySelector("img")!);
+    fireEvent.click(view.getByTitle("放大", { exact: true }));
+    expect(view.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.click(view.getByRole("dialog").querySelector(".image-lightbox-canvas")!);
+    expect(view.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(img).toHaveFocus());
   });
 
   it("remembers inline display width per document and keeps preview zoom independent", async () => {

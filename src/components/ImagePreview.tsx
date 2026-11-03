@@ -1,9 +1,13 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Scan, X, ZoomIn, ZoomOut } from "lucide-react";
+import { trapTab } from "../lib/focus";
 
 export default function ImagePreview({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
   const stage = useRef<HTMLDivElement>(null);
   const image = useRef<HTMLImageElement>(null);
+  const toolbar = useRef<HTMLDivElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const gesture = useRef<{ fromImage: boolean; moved: boolean; x: number; y: number } | null>(null);
   const [natural, setNatural] = useState({ width: 0, height: 0 });
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [scale, setScale] = useState(1);
@@ -16,6 +20,7 @@ export default function ImagePreview({ src, alt, onClose }: { src: string; alt: 
   const height = natural.height * actual;
   const canvasWidth = Math.max(viewport.width, width + 32);
   const canvasHeight = Math.max(viewport.height, height + 32);
+  useLayoutEffect(() => { closeButton.current?.focus(); }, []);
   useLayoutEffect(() => {
     const element = stage.current;
     if (!element) return;
@@ -56,24 +61,37 @@ export default function ImagePreview({ src, alt, onClose }: { src: string; alt: 
     return () => element.removeEventListener("wheel", wheel);
   });
   const canDrag = canvasWidth > viewport.width || canvasHeight > viewport.height;
-  return <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={alt || "图片预览"}>
-    <div className="image-lightbox-toolbar">
+  return <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={alt || "图片预览"} onKeyDown={trapTab} onClick={(event) => {
+    const target = event.target as Node;
+    if (image.current?.contains(target) || toolbar.current?.contains(target)) return;
+    // Pointer capture can retarget an image click to the stage. A pan must also
+    // stay open, even when the pointer is released over empty canvas.
+    if (stage.current?.contains(target) && event.detail > 0 && (gesture.current?.fromImage || gesture.current?.moved)) return;
+    onClose();
+  }}>
+    <div ref={toolbar} className="image-lightbox-toolbar">
       <button title="缩小" onClick={() => zoom(actual / 1.25)}><ZoomOut /></button>
       <output title="相对于原始图片尺寸">{Math.round(actual * 100)}%</output>
       <button title="放大" onClick={() => zoom(actual * 1.25)}><ZoomIn /></button>
       <button title="适应窗口" onClick={() => { focal.current = null; setFitting(true); }}><Scan /></button>
-      <button title="关闭图片预览" onClick={onClose}><X /></button>
+      <button ref={closeButton} title="关闭图片预览" onClick={onClose}><X /></button>
     </div>
-    <div ref={stage} className={`image-lightbox-stage ${canDrag ? "can-drag" : ""}`} onDoubleClick={(event) => zoom(actual < 1 ? 1 : actual * 2, event.clientX, event.clientY)} onPointerDown={(event) => {
-      if (!canDrag || event.button !== 0) return;
+    <div ref={stage} className={`image-lightbox-stage ${canDrag ? "can-drag" : ""}`} onDoubleClick={(event) => {
+      if (event.target === image.current || gesture.current?.fromImage) zoom(actual < 1 ? 1 : actual * 2, event.clientX, event.clientY);
+    }} onPointerDown={(event) => {
+      if (event.button !== 0) return;
+      gesture.current = { fromImage: event.target === image.current, moved: false, x: event.clientX, y: event.clientY };
+      if (!canDrag) return;
       event.preventDefault();
       drag.current = { x: event.clientX, y: event.clientY, left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop };
       event.currentTarget.setPointerCapture(event.pointerId);
     }} onPointerMove={(event) => {
+      const start = gesture.current;
+      if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5) start.moved = true;
       if (!drag.current) return;
       event.currentTarget.scrollLeft = drag.current.left - (event.clientX - drag.current.x);
       event.currentTarget.scrollTop = drag.current.top - (event.clientY - drag.current.y);
-    }} onPointerUp={(event) => { drag.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={() => { drag.current = null; }} onLostPointerCapture={() => { drag.current = null; }}>
+    }} onPointerUp={(event) => { drag.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={() => { drag.current = null; if (gesture.current) gesture.current.moved = true; }} onLostPointerCapture={() => { drag.current = null; }}>
       <span className="image-lightbox-canvas" style={{ width: canvasWidth, height: canvasHeight }}>
         <img ref={image} src={src} alt={alt} draggable={false} style={{ width: natural.width ? width : undefined, height: natural.height ? height : undefined }} onLoad={(event) => setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })} />
       </span>

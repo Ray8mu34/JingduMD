@@ -1,5 +1,5 @@
 import type { HighlightColor, NewTextHighlight, ResolvedHighlight, TextHighlight } from "../types";
-import { sourceSelection } from "./fileHighlights";
+import { selectedTextOffsets, sourceSelections } from "./fileHighlights";
 
 const SKIP_SELECTOR = [
   "script", "style", "noscript", ".katex-mathml", "[aria-hidden='true']", "[data-highlight-ignore]",
@@ -33,13 +33,6 @@ export function articleTextMap(root: HTMLElement): ArticleTextMap {
   return { text, segments };
 }
 
-function boundaryOffset(map: ArticleTextMap, container: Node, offset: number): number | null {
-  if (container.nodeType !== Node.TEXT_NODE) return null;
-  const segment = map.segments.find((item) => item.node === container);
-  if (!segment || offset < 0 || offset > segment.node.data.length) return null;
-  return segment.start + offset;
-}
-
 function headingForNode(root: HTMLElement, node: Node): string | null {
   const parent = node.parentElement;
   const own = parent?.closest<HTMLElement>("h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]");
@@ -63,11 +56,16 @@ export function selectionToHighlight(
   const range = selection.getRangeAt(0);
   if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
   const map = articleTextMap(root);
-  const startOffset = boundaryOffset(map, range.startContainer, range.startOffset);
-  const endOffset = boundaryOffset(map, range.endContainer, range.endOffset);
-  if (startOffset === null || endOffset === null || endOffset <= startOffset) return null;
+  const selected = map.segments.flatMap((segment) => {
+    const clipped = selectedTextOffsets(range, segment.node);
+    return clipped ? [{ start: segment.start + clipped.start, end: segment.start + clipped.end }] : [];
+  });
+  const startOffset = selected[0]?.start;
+  const endOffset = selected.at(-1)?.end;
+  if (startOffset === undefined || endOffset === undefined || endOffset <= startOffset) return null;
   const quote = map.text.slice(startOffset, endOffset);
   if (!quote.trim() || [...quote].length > 5_000) return null;
+  const sourceRanges = sourceSelections(root, selection);
   return {
     path,
     quote,
@@ -77,7 +75,8 @@ export function selectionToHighlight(
     endOffset,
     headingId: headingForNode(root, range.startContainer),
     color,
-    sourceRange: sourceSelection(root, selection) ?? undefined
+    sourceRange: sourceRanges.length ? { start: sourceRanges[0].start, end: sourceRanges.at(-1)!.end } : undefined,
+    sourceRanges
   };
 }
 
