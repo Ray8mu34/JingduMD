@@ -17,6 +17,7 @@ import ResizableSidebar from "./components/ResizableSidebar";
 import { fitSidebars, READER_MIN, SIDEBAR_MAX, SIDEBAR_MIN } from "./lib/sidebarSizing";
 import { useSidebarWidths } from "./lib/useSidebarWidths";
 import { isNotebook, parseNotebook, notebookOutline, notebookBody } from "./lib/notebook";
+import { isPlainText } from "./lib/documentFormat";
 import MarkdownReader from "./components/MarkdownReader";
 import SourceEditor, { type SourceEditorHandle } from "./components/SourceEditor";
 import UnsavedChangesDialog from "./components/UnsavedChangesDialog";
@@ -151,6 +152,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   const tabbarRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLElement>(null);
   const saveTimer = useRef<number>();
+  const anchorCaptureTimer = useRef<number>();
   const telemetryFrame = useRef<number>();
   const initialized = useRef(false);
   const startupConsumed = useRef(false);
@@ -173,7 +175,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   const liveAnchor = useRef<{ path: string; generation: number; anchor: TextAnchor } | null>(null);
   const notebook = useMemo(() => { if (!doc || !isNotebook(doc.path)) return null; try { return parseNotebook(doc.content); } catch { return null; } }, [doc]);
   const notebookDocument = !!doc && isNotebook(doc.path);
-  const outline = useMemo(() => notebook ? notebookOutline(notebook) : doc && !isNotebook(doc.path) ? extractOutline(parseFileHighlights(doc.content).clean) : [], [doc]);
+  const outline = useMemo(() => notebook ? notebookOutline(notebook) : doc && !isNotebook(doc.path) && !isPlainText(doc.path) ? extractOutline(parseFileHighlights(doc.content).clean) : [], [doc]);
   const metrics = useMemo(() => doc ? readingMetrics(notebook ? notebookBody(notebook) : isNotebook(doc.path) ? "" : doc.content) : null, [doc]);
   const sourceEditor = useRef<SourceEditorHandle>(null);
   const sourceTrigger = useRef<HTMLButtonElement>(null);
@@ -285,7 +287,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     if (!isTauri()) return;
     try {
       const [current, recent] = await Promise.all([
-        path && !isNotebook(path) ? invoke<TextHighlight[]>("list_document_highlights", { path }) : Promise.resolve([]),
+        path && !isNotebook(path) && !isPlainText(path) ? invoke<TextHighlight[]>("list_document_highlights", { path }) : Promise.resolve([]),
         rootRef.current ? invoke<TextHighlight[]>("list_recent_highlights", { limit: 80 }) : Promise.resolve([])
       ]);
       if (!path || documentRef.current?.path === path) setHighlights(current);
@@ -671,7 +673,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   }, [applyTarget, narrow]);
 
   const chooseFile = useCallback(async () => {
-    const selected = await open({ directory: false, multiple: false, title: "打开阅读文件", filters: [{ name: "Markdown / Notebook", extensions: ["md", "markdown", "ipynb"] }] });
+    const selected = await open({ directory: false, multiple: false, title: "打开阅读文件", filters: [{ name: "Markdown / TXT / Notebook", extensions: ["md", "markdown", "txt", "ipynb"] }] });
     if (typeof selected === "string") { if (narrow) setNarrowTreeOpen(false); if (onNewTab && doc) onNewTab(selected); else await applyTarget(selected); }
   }, [applyTarget, narrow, onNewTab, doc]);
 
@@ -680,6 +682,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   }, [root, doc?.path, historyVersion]);
   useLayoutEffect(() => () => {
     window.clearTimeout(saveTimer.current);
+    window.clearTimeout(anchorCaptureTimer.current);
     if (documentRef.current) persistPosition(documentRef.current.path);
   }, [persistPosition]);
   useEffect(() => {
@@ -721,7 +724,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
       frame = 0;
       if (cancelled) return;
       const article = scrollRef.current?.querySelector<HTMLElement>(".markdown-body");
-      const native = doc ? documentHighlightRecords(doc.content, doc.path, rootRef.current ?? "") : [];
+      const native = doc && !isPlainText(doc.path) ? documentHighlightRecords(doc.content, doc.path, rootRef.current ?? "") : [];
       const resolved = article ? resolveHighlights(article, [...highlights, ...native]) : [];
       setResolvedHighlights(resolved);
       paintHighlights(resolved);
@@ -940,7 +943,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   }
 
   function captureHighlightSelection(show = false) {
-    if (!doc) return;
+    if (!doc || isPlainText(doc.path)) return;
     const article = scrollRef.current?.querySelector<HTMLElement>(".markdown-body");
     const selection = globalThis.getSelection();
     if (!article || !selection || selection.isCollapsed) { selectionDraft.current = null; return; }
@@ -985,8 +988,16 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     if (state.userGeneration === userScrollGeneration.current) return;
     state.ready = true;
     state.restoreTarget = null;
-    const anchor = captureTextAnchor(scrollRef.current);
-    if (anchor) liveAnchor.current = { path: doc.path, generation: userScrollGeneration.current, anchor };
+    // Hit-testing a text caret can force layout of a very large math document.
+    // Capture the reflow anchor after scrolling settles, rather than per event.
+    window.clearTimeout(anchorCaptureTimer.current);
+    const anchorPath = doc.path;
+    const anchorGeneration = userScrollGeneration.current;
+    anchorCaptureTimer.current = window.setTimeout(() => {
+      if (!scrollRef.current || sourceCurrent.current || documentRef.current?.path !== anchorPath || userScrollGeneration.current !== anchorGeneration) return;
+      const anchor = captureTextAnchor(scrollRef.current);
+      if (anchor) liveAnchor.current = { path: anchorPath, generation: anchorGeneration, anchor };
+    }, 150);
     window.clearTimeout(saveTimer.current);
     const path = doc.path;
     saveTimer.current = window.setTimeout(() => persistPosition(path), 300);
@@ -1038,7 +1049,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
         </div>
       </div>
       <div className="document-title" data-tauri-drag-region title={doc?.path}>{doc?.name ?? (root ? rootName(root) : "静读 Markdown")}</div>
-      {doc && !notebookDocument && !source.draft && <button ref={sourceTrigger} className="toolbar-action" title="编辑 Markdown 源码" onClick={() => {
+      {doc && !notebookDocument && !source.draft && <button ref={sourceTrigger} className="toolbar-action" title={isPlainText(doc.path) ? "编辑 TXT 文本" : "编辑 Markdown 源码"} onClick={() => {
         if (navigationPending.current) { notify("正在打开文档，请完成后再进入源码。"); return; }
         if (highlightWritePending.current) { notify("正在保存高亮，请稍后进入源码。"); return; }
         preserveAnchor(); setFindOpen(false); clearFindHighlights(); setHighlightPopover(null); setDeletedHighlight(null);
@@ -1096,7 +1107,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
           : <div className="highlights-panel">
             <button className="annotation-manage-button" onClick={() => { setHighlightPopover(null); setAnnotationManagerOpen(true); }}><Highlighter />找回、备份与回收站</button>
             <div className="highlight-section-title"><span>当前文档</span><small>{resolvedHighlights.filter((item) => !item.orphaned).length}/{resolvedHighlights.length}</small></div>
-            {!resolvedHighlights.length && <p className="highlight-empty">{notebookDocument ? "选中 Markdown 单元格正文即可添加高亮，标记随 notebook 文件保存。" : "选中正文后即可添加高亮。标记随 Markdown 文件保存。"}</p>}
+            {!resolvedHighlights.length && <p className="highlight-empty">{doc && isPlainText(doc.path) ? "TXT 按纯文本显示，支持阅读、查找和编辑。" : notebookDocument ? "选中 Markdown 单元格正文即可添加高亮，标记随 notebook 文件保存。" : "选中正文后即可添加高亮。标记随 Markdown 文件保存。"}</p>}
             {resolvedHighlights.map((item) => <div key={item.id} className={`highlight-card color-${item.color} ${item.orphaned ? "orphaned" : ""}`}>
               <button className="highlight-quote" onClick={() => navigateToStoredHighlight(item)} title={item.orphaned ? "原文变化后已无法定位" : "跳转到高亮"}><span>{item.quote}</span>{item.orphaned && <small>待恢复</small>}</button>
               <div className="highlight-card-actions">{HIGHLIGHT_COLORS.map((color) => <button key={color} className={`highlight-color color-${color} ${item.color === color ? "active" : ""}`} title={`改为${HIGHLIGHT_COLOR_LABELS[color]}`} aria-label={`改为${HIGHLIGHT_COLOR_LABELS[color]}`} onClick={() => void changeHighlightColor(item.id, color, item.path)} />)}<button className="highlight-delete" title="删除高亮" aria-label="删除高亮" onClick={() => void deleteHighlight(item.id, item.path)}><Trash2 /></button></div>

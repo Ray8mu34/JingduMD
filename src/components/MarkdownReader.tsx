@@ -1,7 +1,8 @@
-import { Children, cloneElement, createContext, createElement, isValidElement, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Children, cloneElement, createContext, createElement, isValidElement, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type ComponentPropsWithoutRef } from "react";
 import ImagePreview from "./ImagePreview";
 import { createPortal } from "react-dom";
-import ReactMarkdown, { type Components } from "react-markdown";
+import { isPlainText } from "../lib/documentFormat";
+import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkFrontmatter from "remark-frontmatter";
@@ -11,6 +12,7 @@ import type { PluggableList } from "unified";
 import DOMPurify from "dompurify";
 import katex from "katex";
 import { useTabInvoke } from "../lib/tabContext";
+import { enrichCodeColors } from "../lib/codeColor";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronDown, ChevronRight, Code2, Image as ImageIcon, Maximize2, SlidersHorizontal } from "lucide-react";
 import type { AssetPayload, DocumentPayload } from "../types";
@@ -18,6 +20,8 @@ import { isExternalUrl, resolveLocalPath } from "../lib/paths";
 import { holdImageResizeScroll } from "../lib/imageResizeScroll";
 import { imageSizeKey, readImageWidth, saveImageWidth } from "../lib/imageSizing";
 import { useOutsideDismiss } from "../lib/useOutsideDismiss";
+import { isSvgSource, scheduleMediaWork } from "../lib/mediaWorkQueue";
+import { isAnimatedSvg, rasterizeSvg } from "../lib/svgRaster";
 import { remarkCallouts, remarkHeadingIds, remarkImageLayout, remarkSanitizeHtml, remarkWikiLinks } from "../lib/markdown";
 import { prepareFileHighlights } from "../lib/fileHighlights";
 import { notebookHighlightCells, prepareNotebookCell } from "../lib/notebookHighlights";
@@ -39,6 +43,35 @@ const markdownSanitizeSchema = {
 const ReaderNightContext = createContext(false);
 const markdownPlugins = [remarkGfm, remarkMath, remarkFrontmatter, remarkWikiLinks, remarkCallouts, remarkHeadingIds, remarkImageLayout, remarkSanitizeHtml];
 const htmlPlugins: PluggableList = [rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]];
+const EMPTY_REMOTE_HOSTS: string[] = [];
+const ignoreRemoteHost = () => undefined;
+
+const NotebookCellContext = createContext<{
+  notebook: Notebook; cell: Notebook["cells"][number]; index: number; components: Components;
+  image: (source: string, alt: string) => ReactNode;
+} | null>(null);
+
+function NotebookCellLink(props: ComponentPropsWithoutRef<"a"> & ExtraProps) {
+  const context = useContext(NotebookCellContext)!;
+  let href = props.href;
+  if (href?.startsWith("#")) {
+    let hash = href.slice(1);
+    try { hash = decodeURIComponent(hash); } catch { /* Keep malformed fragments inert. */ }
+    const headings = notebookOutline(context.notebook);
+    const target = headings.find(h => h.id === `user-content-nb-${context.index}-${hash}`)
+      ?? headings.find(h => h.id.replace(/^user-content-nb-\d+-/, "") === hash);
+    if (target) href = `#${target.id}`;
+  }
+  return context.components.a ? createElement(context.components.a, { ...props, href }) : null;
+}
+
+function NotebookCellImage(props: ComponentPropsWithoutRef<"img"> & ExtraProps) {
+  const context = useContext(NotebookCellContext)!;
+  if (!props.src?.startsWith("#attachment-")) return context.components.img ? createElement(context.components.img, props) : null;
+  const name = decodeURIComponent(props.src.slice(12));
+  const source = notebookImage(context.cell.attachments[name]);
+  return source ? context.image(source, props.alt || name) : <span>此附件暂不支持或已损坏：{name}</span>;
+}
 
 function useVisible<T extends HTMLElement>(rootMargin = "500px", eager = false) {
   const ref = useRef<T>(null);
@@ -78,8 +111,12 @@ function LocalImage({ documentPath, source, alt, inline, remotePolicy, allowedRe
   loadMargin: string;
 }) {
   const invoke = useTabInvoke();
-  const { ref, visible } = useVisible<HTMLSpanElement>(loadMargin, source.startsWith("data:"));
+  const svgSource = isSvgSource(source);
+  const { ref, visible } = useVisible<HTMLSpanElement>(loadMargin, source.startsWith("data:") && !svgSource);
   const [url, setUrl] = useState("");
+  const [originalUrl, setOriginalUrl] = useState("");
+  const [printOriginal, setPrintOriginal] = useState(false);
+  const sourceDimensions = useRef<{ width: number; height: number }>();
   const [error, setError] = useState(false);
   const [allowOnce, setAllowOnce] = useState(false);
   const [zoomed, setZoomed] = useState(false);
@@ -116,25 +153,83 @@ function LocalImage({ documentPath, source, alt, inline, remotePolicy, allowedRe
   const printCollapsed = useRef(false);
   const isRemote = /^https?:/i.test(source);
   const host = isRemote ? remoteHost(source) : "";
-  const remoteAllowed = remotePolicy !== "block" && (remotePolicy === "allow" || allowedRemoteHosts.includes(host) || allowOnce);
+  const remoteAllowed = !isRemote || remotePolicy !== "block" && (remotePolicy === "allow" || allowedRemoteHosts.includes(host) || allowOnce);
 
   useEffect(() => {
     setUrl("");
+    setOriginalUrl("");
+    sourceDimensions.current = undefined;
     setError(false);
     setCollapsed(false);
     if (!visible) return;
-    if (/^data:/i.test(source)) { setUrl(source); return; }
+    if (/^data:/i.test(source) && !svgSource) { setUrl(source); return; }
+    const controller = new AbortController();
     let objectUrl = "";
+    let bitmapUrl = "";
     const command = isRemote ? "read_remote_image" : "read_asset";
     const args = isRemote ? { url: source } : { documentPath, path: resolveLocalPath(documentPath, source) };
     if (isRemote && !remoteAllowed) return;
-    invoke<AssetPayload>(command, args)
-      .then((payload) => {
+    let nextUrl = source;
+    let dimensions: { width: number; height: number } | undefined;
+    let decodedImage: HTMLImageElement | undefined;
+    let rasterAllowed = true;
+    const load = async () => {
+      let svg = svgSource;
+      if (!/^data:/i.test(source)) {
+        const payload = await invoke<AssetPayload>(command, args);
+        if (controller.signal.aborted) return;
+        svg ||= payload.mime === "image/svg+xml";
+        if (svg) rasterAllowed = !isAnimatedSvg(new TextDecoder().decode(new Uint8Array(payload.data)));
         objectUrl = URL.createObjectURL(new Blob([new Uint8Array(payload.data)], { type: payload.mime }));
-        setUrl(objectUrl);
-      }).catch(() => setError(true));
-    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [documentPath, isRemote, remoteAllowed, source, visible]);
+        nextUrl = objectUrl;
+      }
+      if (svg) {
+        if (/^data:/i.test(source)) {
+          try {
+            const body = source.slice(source.indexOf(",") + 1);
+            rasterAllowed = !isAnimatedSvg(/;base64,/i.test(source) ? atob(body) : decodeURIComponent(body));
+          } catch { rasterAllowed = false; }
+        }
+        const image = new Image();
+        image.decoding = "async";
+        image.src = nextUrl;
+        // Older WebViews may lack decode(); normal img loading remains the fallback.
+        if (typeof image.decode === "function") {
+          await image.decode();
+          decodedImage = image;
+        }
+        if (controller.signal.aborted) return;
+        if (image.naturalWidth && image.naturalHeight) {
+          dimensions = { width: image.naturalWidth, height: image.naturalHeight };
+        }
+      }
+    };
+    const publish = async () => {
+      if (controller.signal.aborted) return;
+      sourceDimensions.current = dimensions;
+      if (dimensions) { setNaturalWidth(dimensions.width); setNaturalHeight(dimensions.height); }
+      setOriginalUrl(nextUrl);
+      setUrl(bitmapUrl || nextUrl);
+    };
+    const prepareBitmap = async () => {
+      if (controller.signal.aborted || !decodedImage || !rasterAllowed) return;
+      const bitmap = await rasterizeSvg(decodedImage);
+      if (bitmap && !controller.signal.aborted) bitmapUrl = URL.createObjectURL(bitmap);
+    };
+    // Decoding can finish during a new scroll gesture; defer DOM insertion too.
+    const pending = svgSource
+      ? scheduleMediaWork(load, controller.signal)
+        .then(() => scheduleMediaWork(prepareBitmap, controller.signal))
+        .then(() => scheduleMediaWork(publish, controller.signal))
+      : load().then(publish);
+    void pending.catch(() => {
+      if (controller.signal.aborted) return;
+      if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = ""; }
+      if (bitmapUrl) { URL.revokeObjectURL(bitmapUrl); bitmapUrl = ""; }
+      setError(true);
+    });
+    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); if (bitmapUrl) URL.revokeObjectURL(bitmapUrl); };
+  }, [documentPath, invoke, isRemote, remoteAllowed, source, svgSource, visible]);
 
   useEffect(() => {
     if (!zoomed) return;
@@ -143,8 +238,8 @@ function LocalImage({ documentPath, source, alt, inline, remotePolicy, allowedRe
     return () => window.removeEventListener("keydown", close);
   }, [zoomed]);
   useEffect(() => {
-    const expand = () => { printCollapsed.current = collapsed; setCollapsed(false); };
-    const restore = () => setCollapsed(printCollapsed.current);
+    const expand = () => { printCollapsed.current = collapsed; setCollapsed(false); setPrintOriginal(true); };
+    const restore = () => { setCollapsed(printCollapsed.current); setPrintOriginal(false); };
     window.addEventListener("jingreader:expand-for-print", expand);
     window.addEventListener("jingreader:restore-after-print", restore);
     return () => { window.removeEventListener("jingreader:expand-for-print", expand); window.removeEventListener("jingreader:restore-after-print", restore); };
@@ -174,10 +269,10 @@ function LocalImage({ documentPath, source, alt, inline, remotePolicy, allowedRe
           <button type="button" onClick={() => changeWidth(null)} disabled={displayWidth === null}>适应正文</button>
         </span>}
       </span><span className="image-viewport"><span className="image-surface" style={{ width: naturalWidth ? displayWidth === null && naturalHeight ? `min(${naturalWidth}px, ${70 * naturalWidth / naturalHeight}vh)` : `${naturalWidth * (displayWidth ?? 100) / 100}px` : undefined, maxWidth: displayWidth === null ? "100%" : "none" }}>
-        <img ref={imageRef} src={url} alt={alt ?? ""} onError={() => { setUrl(""); setError(true); }} draggable={false} tabIndex={0} loading={source.startsWith("data:") ? "eager" : "lazy"} referrerPolicy="no-referrer" onLoad={(event) => { setNaturalWidth(event.currentTarget.naturalWidth); setNaturalHeight(event.currentTarget.naturalHeight); setRenderedWidth(event.currentTarget.getBoundingClientRect().width); }} onKeyDown={(event) => { if ((event.key === "Enter" || event.key === " ") && !event.currentTarget.closest("a")) { event.preventDefault(); previewCaller.current = event.currentTarget; setZoomed(true); } }} onClick={(event) => { if (event.currentTarget.closest("a")) return; event.preventDefault(); event.stopPropagation(); previewCaller.current = event.currentTarget; setZoomed(true); }} />
+        <img decoding="async" width={naturalWidth || undefined} height={naturalHeight || undefined} ref={imageRef} src={printOriginal ? originalUrl || url : url} data-svg-bitmap={originalUrl && originalUrl !== url ? "" : undefined} alt={alt ?? ""} onError={() => { setUrl(""); setError(true); }} draggable={false} tabIndex={0} loading={source.startsWith("data:") ? "eager" : "lazy"} referrerPolicy="no-referrer" onLoad={(event) => { setNaturalWidth(sourceDimensions.current?.width ?? event.currentTarget.naturalWidth); setNaturalHeight(sourceDimensions.current?.height ?? event.currentTarget.naturalHeight); setRenderedWidth(event.currentTarget.getBoundingClientRect().width); }} onKeyDown={(event) => { if ((event.key === "Enter" || event.key === " ") && !event.currentTarget.closest("a")) { event.preventDefault(); previewCaller.current = event.currentTarget; setZoomed(true); } }} onClick={(event) => { if (event.currentTarget.closest("a")) return; event.preventDefault(); event.stopPropagation(); previewCaller.current = event.currentTarget; setZoomed(true); }} />
         {(["top-left", "top-right", "bottom-left", "bottom-right"] as const).map((corner, index) => <button key={corner} className={`image-resize-handle ${corner}`} type="button" aria-label={`${["左上角", "右上角", "左下角", "右下角"][index]}拖动缩放图片`} title={`${["左上角", "右上角", "左下角", "右下角"][index]}拖动缩放图片 · ${percent}%（双击恢复 100%）`} onClick={(event) => event.stopPropagation()} onDoubleClick={() => changeWidth(100)} onKeyDown={(event) => { if (["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp"].includes(event.key)) { event.preventDefault(); changeWidth(Math.max(1, Math.min(400, percent + (["ArrowLeft", "ArrowDown"].includes(event.key) ? -5 : 5)))); } }} onPointerDown={(event) => { if (event.button !== 0 || !naturalWidth) return; event.preventDefault(); event.stopPropagation(); scrollHold.current = holdImageResizeScroll(event.currentTarget); resizeRef.current = { x: event.clientX, y: event.clientY, width: imageRef.current?.getBoundingClientRect().width ?? naturalWidth }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { const drag = resizeRef.current; if (!drag) return; const dx = (event.clientX - drag.x) * (corner.endsWith("left") ? -1 : 1); const dy = (event.clientY - drag.y) * (corner.startsWith("top") ? -1 : 1) * (naturalWidth / (naturalHeight || naturalWidth)); const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy; changeWidth(Math.max(1, Math.min(400, Math.round((drag.width + delta) / naturalWidth * 100)))); }} onPointerUp={(event) => { finishResize(); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={finishResize} onLostPointerCapture={finishResize}><Maximize2 /></button>)}
       </span></span></>}
-      {zoomed && createPortal(<ImagePreview src={url} alt={alt || "图片预览"} onClose={closePreview} />, globalThis.document.body)}</>
+      {zoomed && createPortal(<ImagePreview src={originalUrl || url} alt={alt || "图片预览"} onClose={closePreview} />, globalThis.document.body)}</>
       : error ? <span className="broken-image">图片无法读取：{source.startsWith("data:") ? alt || "已保存的图片" : source}</span>
       : isRemote && remotePolicy === "block" ? <span className="image-placeholder remote-image-consent">远程图片已阻止<small>{host}</small></span>
       : isRemote && !remoteAllowed ? <span className="image-placeholder remote-image-consent">此文档引用了远程图片<small>{host}</small><span><button onClick={() => setAllowOnce(true)}>仅加载这张</button><button onClick={() => onAllowRemoteHost(host)}>始终允许此站点</button></span></span>
@@ -317,10 +412,16 @@ function LazyCode({ language, value, loadMargin }: { language: string; value: st
   const [html, setHtml] = useState("");
   useEffect(() => {
     if (!visible) return;
+    let cancelled = false;
     import("highlight.js").then(({ default: hljs }) => {
-      try { setHtml(language && hljs.getLanguage(language) ? hljs.highlight(value, { language }).value : hljs.highlightAuto(value).value); }
+      if (cancelled) return;
+      try {
+        const result = language && hljs.getLanguage(language) ? hljs.highlight(value, { language }) : hljs.highlightAuto(value);
+        setHtml(enrichCodeColors(result.value, result.language));
+      }
       catch { setHtml(""); }
     });
+    return () => { cancelled = true; };
   }, [language, value, visible]);
   return <code ref={ref} className={`hljs language-${language}`} {...(html ? { dangerouslySetInnerHTML: { __html: html } } : {})}>{html ? undefined : value}</code>;
 }
@@ -331,10 +432,15 @@ function LazyMath({ source, display, loadMargin, eager }: { source: string; disp
   // TeX for KaTeX while reading changes both line wrapping and anchor text offsets.
   const html = useMemo(() => eager || visible
     ? katex.renderToString(source, { displayMode: display, throwOnError: false, strict: "warn", trust: false })
+      .replace('class="katex-mathml"', 'class="katex-mathml" aria-hidden="true"')
     : "", [display, eager, source, visible]);
   return <span ref={ref} className={display ? `lazy-math math-display ${source.length > 90 ? "is-wide" : ""}` : "lazy-math math-inline"}
-    {...(display ? { role: "region", "aria-label": "数学公式，可横向滚动", tabIndex: 0 } : {})}
-    {...(html ? { dangerouslySetInnerHTML: { __html: html } } : {})}>{html ? undefined : source}</span>;
+    {...(display ? { role: "region", "aria-label": "数学公式，可横向滚动", tabIndex: 0 } : {})}>
+    {/* Expose one named math object. Expanding every MathML glyph into Windows
+        UIA nodes can stall native selection/scrolling in formula-heavy articles.
+        Retain the MathML markup for document consumers and export tooling. */}
+    {html ? <span role="math" aria-label={source} dangerouslySetInnerHTML={{ __html: html }} /> : source}
+  </span>;
 }
 
 export function sanitizeMermaidSvg(source: string): string {
@@ -362,7 +468,11 @@ function MermaidBlock({ source, loadMargin }: { source: string; loadMargin: stri
     let active = true;
     setSvg({ markup: "", width: null });
     setError("");
-    import("mermaid").then(async ({ default: mermaid }) => {
+    const controller = new AbortController();
+    let rendered = "";
+    void scheduleMediaWork(async () => {
+      const { default: mermaid } = await import("mermaid");
+      if (!active) return;
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: "strict",
@@ -370,13 +480,14 @@ function MermaidBlock({ source, loadMargin }: { source: string; loadMargin: stri
         suppressErrorRendering: true,
         flowchart: { htmlLabels: false }
       });
-      try {
-        const result = await mermaid.render(`mermaid-${crypto.randomUUID()}`, source);
-        const markup = sanitizeMermaidSvg(result.svg);
-        if (active) setSvg({ markup, width: mermaidViewBoxWidth(markup) });
-      } catch (reason) { if (active) setError(String(reason)); }
-    });
-    return () => { active = false; };
+      const result = await mermaid.render(`mermaid-${crypto.randomUUID()}`, source);
+      rendered = result.svg;
+    }, controller.signal).then(() => scheduleMediaWork(async () => {
+      if (!active) return;
+      const markup = sanitizeMermaidSvg(rendered);
+      setSvg({ markup, width: mermaidViewBoxWidth(markup) });
+    }, controller.signal)).catch((reason) => { if (active) setError(String(reason)); });
+    return () => { active = false; controller.abort(); };
   }, [source, visible, night]);
   return <div ref={ref} className={`mermaid-block ${svg.width && svg.width > 720 ? "is-wide" : ""}`} role="region" aria-label="Mermaid 图表，可横向滚动" tabIndex={0}>
     {svg.markup ? <div className="mermaid-canvas" style={svg.width ? { width: `${svg.width}px` } : undefined} dangerouslySetInnerHTML={{ __html: svg.markup }} />
@@ -430,9 +541,13 @@ export function documentRenderTier(content: string): "normal" | "long" | "extrem
 }
 
 export default function MarkdownReader({
-  document: doc, night, showFrontmatter = true, remoteImagePolicy = "ask", allowedRemoteHosts = [],
-  onAllowRemoteHost = () => undefined, onOpenDocument, onError
+  document: doc, night, showFrontmatter = true, remoteImagePolicy = "ask", allowedRemoteHosts = EMPTY_REMOTE_HOSTS,
+  onAllowRemoteHost = ignoreRemoteHost, onOpenDocument, onError
 }: Props) {
+  // Callback/policy changes must not change React component types: doing so
+  // unmounts every image, briefly collapses its height, and moves the reader.
+  const options = useRef({ remoteImagePolicy, allowedRemoteHosts, onAllowRemoteHost, onOpenDocument, onError });
+  options.current = { remoteImagePolicy, allowedRemoteHosts, onAllowRemoteHost, onOpenDocument, onError };
   const notebook = useMemo<{ data?: Notebook; error?: string } | null>(() => {
     if (!isNotebook(doc.path)) return null;
     try { return { data: parseNotebook(doc.content) }; }
@@ -441,12 +556,12 @@ export default function MarkdownReader({
   const renderTier = useMemo(() => documentRenderTier(notebook?.data ? notebook.data.cells.map(cell => cell.source).join("\n") : doc.content), [doc.content, notebook]);
   const loadMargin = renderTier === "extreme" ? "80px" : "500px";
   const parsed = useMemo(() => {
-    return prepareFileHighlights(notebook ? "" : doc.content);
-  }, [doc.content, notebook]);
+    return prepareFileHighlights(notebook || isPlainText(doc.path) ? "" : doc.content);
+  }, [doc.path, doc.content, notebook]);
   const components = useMemo<Components>(() => ({
     pre: ({ children }) => <MarkdownPre>{children}</MarkdownPre>,
     table: ({ children }) => <ScrollableTable>{children}</ScrollableTable>,
-    img: ({ src, alt, node }) => src ? <LocalImage key={imageSizeKey(doc.path, src)} documentPath={doc.path} source={src} alt={alt} inline={node?.properties?.dataImageLayout === "inline"} remotePolicy={remoteImagePolicy} allowedRemoteHosts={allowedRemoteHosts} onAllowRemoteHost={onAllowRemoteHost} loadMargin={loadMargin} /> : null,
+    img: ({ src, alt, node }) => src ? <LocalImage key={imageSizeKey(doc.path, src)} documentPath={doc.path} source={src} alt={alt} inline={node?.properties?.dataImageLayout === "inline"} remotePolicy={options.current.remoteImagePolicy} allowedRemoteHosts={options.current.allowedRemoteHosts} onAllowRemoteHost={options.current.onAllowRemoteHost} loadMargin={loadMargin} /> : null,
     blockquote: ({ children, node }) => <CalloutBlock calloutKind={String(node?.properties?.dataCallout ?? "")}>{children}</CalloutBlock>,
     h1: ({ id, children }) => <CollapsibleHeading level={1} id={id}>{children}</CollapsibleHeading>,
     h2: ({ id, children }) => <CollapsibleHeading level={2} id={id}>{children}</CollapsibleHeading>,
@@ -467,11 +582,11 @@ export default function MarkdownReader({
         }
       }
       else if (isExternalUrl(href)) void openUrl(href).catch((error: unknown) => {
-        onError?.(`无法打开链接：${error instanceof Error ? error.message : String(error)}`);
+        options.current.onError?.(`无法打开链接：${error instanceof Error ? error.message : String(error)}`);
       });
       else {
         const [source, hash] = href.split("#");
-        onOpenDocument(resolveLocalPath(doc.path, source), hash);
+        options.current.onOpenDocument(resolveLocalPath(doc.path, source), hash);
       }
     }}>{children}</a>,
     code: ({ className, children }) => {
@@ -482,13 +597,13 @@ export default function MarkdownReader({
       if (!className) return <code>{children}</code>;
       return <LazyCode language={language} value={value} loadMargin={loadMargin} />;
     }
-  }), [allowedRemoteHosts, doc.path, loadMargin, onAllowRemoteHost, onOpenDocument, onError, remoteImagePolicy, renderTier]);
+  }), [doc.path, loadMargin, renderTier]);
 
   const markdown = useMemo(() => <ReactMarkdown
     remarkPlugins={[...markdownPlugins, parsed.plugin]}
     rehypePlugins={htmlPlugins}
     components={components}
-  >{parsed.body}</ReactMarkdown>, [components, parsed]);
+  >{parsed.body}</ReactMarkdown>, [components, parsed, allowedRemoteHosts, remoteImagePolicy]);
 
   const notebookCells = useMemo(() => notebook?.data ? notebookHighlightCells(notebook.data.cells) : [], [notebook]);
   const notebookContent = useMemo(() => notebook ? notebook.error ? <p role="alert">{notebook.error}</p> : <>
@@ -496,25 +611,9 @@ export default function MarkdownReader({
       {notebook.data!.cells.map((cell, index) => {
         const image = (source: string, alt: string) => <LocalImage documentPath={doc.path} source={source} alt={alt} inline={false} remotePolicy={remoteImagePolicy} allowedRemoteHosts={allowedRemoteHosts} onAllowRemoteHost={onAllowRemoteHost} loadMargin={loadMargin} />;
         const prepared = cell.type === "markdown" ? prepareNotebookCell(notebookCells[index]!) : null;
-        if (prepared) return <ReactMarkdown key={index}
+        if (prepared) return <NotebookCellContext.Provider key={index} value={{ notebook: notebook.data!, cell, index, components, image }}><ReactMarkdown
           remarkPlugins={[...markdownPlugins.filter(plugin => plugin !== remarkHeadingIds), [remarkHeadingIds, { prefix: `nb-${index}-` }], remarkAttachments, prepared.plugin]}
-          rehypePlugins={htmlPlugins} components={{ ...components, a: props => {
-            let href = props.href;
-            if (href?.startsWith("#")) {
-              let hash = href.slice(1);
-              try { hash = decodeURIComponent(hash); } catch { /* Keep malformed fragments inert. */ }
-              const headings = notebookOutline(notebook.data!);
-              const target = headings.find(h => h.id === `user-content-nb-${index}-${hash}`)
-                ?? headings.find(h => h.id.replace(/^user-content-nb-\d+-/, "") === hash);
-              if (target) href = `#${target.id}`;
-            }
-            return components.a ? createElement(components.a, { ...props, href }) : null;
-          }, img: props => {
-            if (!props.src?.startsWith("#attachment-")) return components.img ? createElement(components.img, props) : null;
-            const name = decodeURIComponent(props.src.slice(12));
-            const source = notebookImage(cell.attachments[name]);
-            return source ? image(source, props.alt || name) : <span>此附件暂不支持或已损坏：{name}</span>;
-          } }}>{prepared.body}</ReactMarkdown>;
+          rehypePlugins={htmlPlugins} components={{ ...components, a: NotebookCellLink, img: NotebookCellImage }}>{prepared.body}</ReactMarkdown></NotebookCellContext.Provider>;
         if (cell.type === "raw") return <pre key={index} className="notebook-raw" data-find-exclude="">{cell.source}</pre>;
         if (cell.type !== "code") return <p key={index} data-find-exclude="">此单元格暂不支持</p>;
         return <section className="notebook-code-cell" key={index}>
@@ -532,6 +631,6 @@ export default function MarkdownReader({
 
   return <ReaderNightContext.Provider value={night}><article className={`markdown-body ${renderTier !== "normal" ? "long-document" : ""} ${renderTier === "extreme" ? "extreme-document" : ""}`} data-render-tier={renderTier} data-document-path={doc.path}>
     {showFrontmatter && parsed.frontmatter.length > 0 && <details className="frontmatter"><summary>文档属性</summary>{parsed.frontmatter.map((line, index) => <div key={index}>{line}</div>)}</details>}
-    {notebook ? notebookContent : markdown}
+    {isPlainText(doc.path) ? <div className="plain-text-body">{doc.content}</div> : notebook ? notebookContent : markdown}
   </article></ReaderNightContext.Provider>;
 }

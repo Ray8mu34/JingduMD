@@ -58,6 +58,33 @@ try {
   const scopes = await page.evaluate(() => [...new Set(window.__JINGREADER_QA__.scopedCalls.filter((call) => call.command === "read_document").map((call) => call.tabId))]);
   assert.equal(scopes.length, 2);
   assert.ok(scopes.every(Boolean));
+  // Overflowed tabs must follow selection even though App remounts its bar.
+  const activeVisible = async () => page.waitForFunction(() => {
+    const list = document.querySelector('.document-tab-list').getBoundingClientRect();
+    const active = document.querySelector('.document-tab.active').getBoundingClientRect();
+    return active.left >= list.left - 1 && active.right <= list.right + 1;
+  });
+  for (let i = 0; i < 15; i++) {
+    await page.getByRole('button', { name: '新建标签页', exact: true }).click();
+    await page.waitForFunction(count => document.querySelectorAll('[role="tab"]').length === count, i + 2);
+    await activeVisible();
+  }
+  assert(await page.locator('.document-tab-list').evaluate(el => el.scrollLeft > 0));
+  await page.getByRole('tab', { selected: true }).focus();
+  await page.keyboard.press('Home');
+  await activeVisible();
+  assert.equal(await page.getByRole('tab', { selected: true }).textContent(), 'reader-showcase.md');
+  await page.keyboard.press('End');
+  await activeVisible();
+  await page.keyboard.press('ArrowLeft');
+  await activeVisible();
+  assert(await page.locator('.document-tab-list').evaluate(el => el.scrollLeft > 0));
+  await page.locator('.document-tab.active .close-tab').click();
+  await activeVisible();
+  await page.setViewportSize({ width: 900, height: 700 });
+  await activeVisible();
+  await page.setViewportSize({ width: 560, height: 700 });
+  await activeVisible();
   assert.deepEqual(errors, []);
   await page.close();
   console.log("Tabs: open/switch/close, position restoration, separate IPC scopes, new windows, shortcuts and 560px layout passed.");

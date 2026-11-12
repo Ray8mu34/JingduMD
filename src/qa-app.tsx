@@ -10,7 +10,7 @@ const root = "C:\\qa-fixtures";
 const paths = names.map((name) => `${root}\\${name}`);
 const params = new URLSearchParams(location.search);
 const extraSample = params.get("sample");
-if (extraSample?.endsWith(".ipynb") && !names.includes(extraSample)) { names.push(extraSample); paths.push(`${root}\\${extraSample}`); }
+if (extraSample && /\.(ipynb|txt)$/i.test(extraSample) && !names.includes(extraSample)) { names.push(extraSample); paths.push(`${root}\\${extraSample}`); }
 const stored = localStorage.getItem("jingreader-qa-preferences");
 const initial = stored ? JSON.parse(stored) as ReaderPreferences : params.get("legacy") ? applyPreset(DEFAULT_PREFERENCES, params.get("legacy") as ReaderPreferences["theme"]) : { ...DEFAULT_PREFERENCES, typographyOverrides: { reading: params.get("selectedFont") ? { chineseFont: params.get("selectedFont")! } : {}, study: {} } };
 const documents = new Map<string, DocumentPayload>();

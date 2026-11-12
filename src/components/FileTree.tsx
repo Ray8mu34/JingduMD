@@ -50,7 +50,7 @@ function TreeNode({ entry, selected, onOpen, onOpenNew, expandedPaths }: { entry
     {expanded && <div className="tree-children">
       {loading && <div className="tree-loading">读取中…</div>}
       {children.map((child) => <TreeNode key={child.path} entry={child} selected={selected} onOpen={onOpen} onOpenNew={onOpenNew} expandedPaths={expandedPaths} />)}
-      {!loading && !children.length && <div className="tree-empty">没有 Markdown 文件</div>}
+      {!loading && !children.length && <div className="tree-empty">没有可阅读的文档</div>}
     </div>}
   </div>;
 }

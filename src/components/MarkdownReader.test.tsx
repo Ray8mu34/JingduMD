@@ -5,8 +5,15 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { imageSizeKey, readImageWidth } from "../lib/imageSizing";
 import { TabContext } from "../lib/tabContext";
+import { rasterizeSvg } from "../lib/svgRaster";
+
+const svgNotebook: DocumentPayload = { path: "plot.ipynb", name: "plot.ipynb", modifiedMs: 0, size: 0,
+  content: JSON.stringify({ nbformat: 4, cells: [{ cell_type: "code", source: "plot()", outputs: [{
+    data: { "image/svg+xml": '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="320"><path d="M0 0L10 10"/></svg>' }
+  }] }] }) };
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(() => Promise.resolve()) }));
+vi.mock("../lib/svgRaster", async importOriginal => ({ ...await importOriginal<typeof import("../lib/svgRaster")>(), rasterizeSvg: vi.fn(async () => null) }));
 vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -16,6 +23,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 describe("MarkdownReader mathematics", () => {
+  it("keeps TXT whitespace and markup literal without rendering HTML or Markdown", () => {
+    const content = "# 标题\n\n  **原样文本**\n<script>alert(1)</script>\n==🟡标记==\nhttps://example.test/";
+    const view = render(<MarkdownReader document={{ path: "订阅.TXT", name: "订阅.TXT", content, modifiedMs: 0, size: content.length }} night={false} onOpenDocument={() => {}} />);
+    expect(view.container.querySelector(".plain-text-body")?.textContent).toBe(content);
+    expect(view.container.querySelector("h1, strong, script, [data-file-highlight]")).toBeNull();
+  });
   it.each(["https://example.test/article", "http://example.test/article", "mailto:reader@example.test"])("opens %s with the system handler", async (url) => {
     const onOpenDocument = vi.fn();
     const document: DocumentPayload = { path: "links.md", name: "links.md", modifiedMs: 0, size: 0, content: `[外部链接](${url})` };
@@ -57,6 +70,105 @@ describe("MarkdownReader mathematics", () => {
     }, undefined);
   });
 
+  it("decodes SVG before insertion and waits if scrolling resumes during decoding", async () => {
+    let finish!: () => void;
+    const decode = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const image = vi.spyOn(globalThis, "Image").mockImplementation(() => ({
+      decoding: "", src: "", naturalWidth: 640, naturalHeight: 320, decode
+    }) as unknown as HTMLImageElement);
+    const view = render(<MarkdownReader document={svgNotebook} night={false} onOpenDocument={() => {}} />);
+    try {
+      await waitFor(() => expect(decode).toHaveBeenCalledOnce());
+      expect(view.container.querySelector("img")).toBeNull();
+      window.dispatchEvent(new Event("wheel"));
+      finish();
+      await new Promise(resolve => setTimeout(resolve, 60));
+      expect(view.container.querySelector("img")).toBeNull();
+      const img = await view.findByAltText("已保存的图片输出");
+      expect(img).toHaveAttribute("decoding", "async");
+      expect(img.closest(".image-surface")).toHaveStyle({ width: "min(640px, 140vh)" });
+    } finally { view.unmount(); image.mockRestore(); }
+  });
+
+  it("does not create a blob for a local SVG response after its document is closed", async () => {
+    let finish!: (payload: { mime: string; data: number[] }) => void;
+    vi.mocked(invoke).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const createUrl = vi.spyOn(URL, "createObjectURL");
+    const document: DocumentPayload = { path: "plot.md", name: "plot.md", modifiedMs: 0, size: 0, content: "![绘图](plot.svg)" };
+    const view = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
+    try {
+      await waitFor(() => expect(finish).toBeTypeOf("function"));
+      view.unmount();
+      finish({ mime: "image/svg+xml", data: [60, 115, 118, 103, 47, 62] });
+      await new Promise(resolve => setTimeout(resolve, 60));
+      expect(createUrl).not.toHaveBeenCalled();
+    } finally { view.unmount(); createUrl.mockRestore(); }
+  });
+
+  it("keeps a loaded image mounted when highlight edits update the surrounding Markdown", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ mime: "image/png", data: [137, 80, 78, 71, 13, 10, 26, 10] });
+    const document: DocumentPayload = { path: "image-highlight.md", name: "image-highlight.md", modifiedMs: 0, size: 0,
+      content: "图片前的正文。\n\n![示意图](figure.png)\n\n这里是待高亮的文字。" };
+    const open = () => {};
+    const view = render(<MarkdownReader document={document} night={false} onOpenDocument={open} />);
+    const original = await view.findByAltText("示意图");
+    const src = original.getAttribute("src");
+    view.rerender(<MarkdownReader document={{ ...document, content: "==🟡图片前的正文。==\n\n![示意图](figure.png)\n\n这里是==🟡待高亮==的文字。" }} night={false} onOpenDocument={open} />);
+    expect(view.getByAltText("示意图")).toBe(original);
+    expect(original).toHaveAttribute("src", src!);
+    view.rerender(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} onAllowRemoteHost={() => {}} onError={() => {}} />);
+    expect(view.getByAltText("示意图")).toBe(original);
+    view.unmount();
+  });
+
+  it("keeps notebook attachment images mounted after Markdown-cell highlighting", async () => {
+    const cell = { cell_type: "markdown", source: "图片前的正文。\n\n![附件图](attachment:figure.png)\n\n待高亮的文字。",
+      attachments: { "figure.png": { "image/png": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=" } } };
+    const document: DocumentPayload = { path: "attachment.ipynb", name: "attachment.ipynb", modifiedMs: 0, size: 0,
+      content: JSON.stringify({ nbformat: 4, cells: [cell] }) };
+    const view = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
+    const original = await view.findByAltText("附件图");
+    view.rerender(<MarkdownReader document={{ ...document, content: JSON.stringify({ nbformat: 4, cells: [{ ...cell,
+      source: "==🟡图片前的正文。==\n\n![附件图](attachment:figure.png)\n\n待高亮的文字。" }] }) }} night={false} onOpenDocument={() => {}} />);
+    expect(view.getByAltText("附件图")).toBe(original);
+    view.unmount();
+  });
+
+  it("uses a bitmap in prose while preserving SVG dimensions, preview and print", async () => {
+    const image = vi.spyOn(globalThis, "Image").mockImplementation(() => ({
+      decoding: "", src: "", naturalWidth: 640, naturalHeight: 320, decode: async () => {}
+    }) as unknown as HTMLImageElement);
+    vi.mocked(rasterizeSvg).mockResolvedValueOnce(new Blob(["bitmap"], { type: "image/png" }));
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    const view = render(<MarkdownReader document={svgNotebook} night={false} onOpenDocument={() => {}} />);
+    try {
+      const img = await view.findByAltText("已保存的图片输出");
+      expect(img).toHaveAttribute("src", "blob:jingreader-test");
+      expect(img).toHaveAttribute("data-svg-bitmap");
+      fireEvent.load(img);
+      expect(img.closest(".image-surface")).toHaveStyle({ width: "min(640px, 140vh)" });
+      fireEvent.click(img);
+      expect(globalThis.document.querySelector(".image-lightbox img")?.getAttribute("src")).toMatch(/^data:image\/svg\+xml/);
+      fireEvent.click(view.getByTitle("关闭图片预览"));
+      fireEvent(window, new Event("jingreader:expand-for-print"));
+      expect(img.getAttribute("src")).toMatch(/^data:image\/svg\+xml/);
+      fireEvent(window, new Event("jingreader:restore-after-print"));
+      expect(img).toHaveAttribute("src", "blob:jingreader-test");
+      view.unmount();
+      expect(revoke).toHaveBeenCalledWith("blob:jingreader-test");
+    } finally { view.unmount(); image.mockRestore(); revoke.mockRestore(); }
+  });
+
+  it("keeps notebook SVG data images lazy until they approach the viewport", () => {
+    const observer = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class { observe() {} disconnect() {} } as unknown as typeof IntersectionObserver;
+    try {
+      const view = render(<MarkdownReader document={svgNotebook} night={false} onOpenDocument={() => {}} />);
+      expect(view.container.querySelector("img")).toBeNull();
+      view.unmount();
+    } finally { globalThis.IntersectionObserver = observer; }
+  });
+
   it("renders fenced math as a display equation without a code toolbar", () => {
     const document: DocumentPayload = { path: "math.md", name: "math.md", modifiedMs: 0, size: 0, content: "```math\nx^2 + y^2 = 1\n```\n\nInline $x$." };
     const { container } = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
@@ -91,6 +203,15 @@ describe("MarkdownReader mathematics", () => {
     expect(container.querySelector("span.lazy-math.math-display")?.closest("pre")).toBeNull();
     expect(container.querySelector("span.lazy-math.math-display")).toHaveAttribute("aria-label", "数学公式，可横向滚动");
     expect(getByText("\\(code\\)")).toBeInTheDocument();
+  });
+
+  it("exposes each formula as one named math object without expanding its MathML into Windows UIA", () => {
+    const document: DocumentPayload = { path: "math.md", name: "math.md", modifiedMs: 0, size: 0, content: "行内 $x^2$。\n\n$$\ny=1\n$$" };
+    const view = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
+    expect(view.container.querySelector('[role="math"][aria-label="x^2"]')).toBeInTheDocument();
+    expect(view.container.querySelector('[role="math"][aria-label="y=1"]')).toBeInTheDocument();
+    expect(view.container.querySelectorAll('.katex-mathml[aria-hidden="true"]')).toHaveLength(2);
+    expect(view.container.querySelectorAll(".katex-mathml math")).toHaveLength(2);
   });
 
   it("does not request a remote image before the user allows its host", () => {

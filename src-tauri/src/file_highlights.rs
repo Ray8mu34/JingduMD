@@ -170,8 +170,8 @@ fn save_source(
     expected_revision: &str,
     content: &str,
 ) -> Result<Vec<u8>, String> {
-    if !path.is_file() || !is_markdown(path) || content.len() > 64 * 1024 * 1024 {
-        return Err("目标不是已有的 Markdown 文档，或内容超过 64MB。".into());
+    if !path.is_file() || !(is_markdown(path) || is_plain_text(path)) || content.len() > 64 * 1024 * 1024 {
+        return Err("目标不是已有的 Markdown/TXT 文档，或内容超过 64MB。".into());
     }
     let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
     if metadata.permissions().readonly() {
@@ -210,7 +210,7 @@ pub fn save_document(
     let bytes = save_source(&db, data, &file, &expected, &revision, &content)?;
     // A successful disk commit remains a success even if ancillary annotation
     // bookkeeping fails. The next read reconciles the annotation catalogue.
-    if let Some(root) = state.current_root.lock().clone() {
+    if let Some(root) = state.current_root.lock().clone().filter(|_| is_markdown(&file)) {
         let _ = annotations::observe(&db, &path, &to_string(&root), &content);
     }
     Ok(DocumentPayload {
@@ -288,7 +288,7 @@ pub fn write_file_highlights(
 ) -> Result<WriteResult, String> {
     let _writing = WRITING.lock();
     let path = guarded_path(&state, &path)?;
-    if !path.is_file() || !is_readable(&path) || content.len() > 64 * 1024 * 1024 || expected.len() > 64 * 1024 * 1024 {
+    if !path.is_file() || !(is_markdown(&path) || notebook::is_notebook(&path)) || content.len() > 64 * 1024 * 1024 || expected.len() > 64 * 1024 * 1024 {
         return Err("目标不是可标注的 Markdown/Notebook 文档，或内容超过 64MB".into());
     }
     if notebook::is_notebook(&path) {
@@ -513,6 +513,22 @@ mod tests {
         fs::write(&path, &bytes).unwrap();
         let result = save_source(&db, &dir, &path, "中文", &revision(&bytes), "中文修改").unwrap();
         assert_eq!(result, "中文修改".as_bytes());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn txt_save_preserves_text_and_checks_external_changes() {
+        let (dir, original, db) = source_fixture();
+        let path = original.with_extension("TXT");
+        let content = "# 纯文本\r\n  **不解析格式**\r\nhttps://example.test/subscription";
+        let bytes = encode_like(&[0xff, 0xfe], content);
+        fs::write(&path, &bytes).unwrap();
+        let changed = format!("{content}中文");
+        let saved = save_source(&db, &dir, &path, content, &revision(&bytes), &changed).unwrap();
+        assert_eq!(decode_text(&saved), changed);
+        assert!(saved.starts_with(&[0xff, 0xfe]));
+        assert_eq!(fs::read(&path).unwrap(), saved);
+        assert!(save_source(&db, &dir, &path, content, &revision(&bytes), "过期修改").is_err());
+        assert_eq!(fs::read(&path).unwrap(), saved);
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]

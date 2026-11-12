@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useTabInvoke } from "../lib/tabContext";
 import { primaryModifier, shortcutLabel } from "../lib/platform";
 import { findSource, sourceText } from "../lib/sourceEditing";
+import { isPlainText } from "../lib/documentFormat";
 import { sourceSyntax } from "../lib/sourceSyntax";
 
 export type SourceEditorHandle = { find: () => void };
@@ -21,7 +22,7 @@ export default forwardRef<SourceEditorHandle, Props>(function SourceEditor(props
   const editor = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLPreElement>(null);
   const [coloredSource, setColoredSource] = useState(() => sourceText(initialContent));
-  const tokens = useMemo(() => sourceSyntax(coloredSource), [coloredSource]);
+  const tokens = useMemo(() => isPlainText(path) ? [{ text: coloredSource, kind: "" }] : sourceSyntax(coloredSource), [coloredSource, path]);
   const search = useRef<HTMLInputElement>(null);
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -57,9 +58,25 @@ export default forwardRef<SourceEditorHandle, Props>(function SourceEditor(props
     area.focus();
     area.setSelectionRange(match.start, match.end);
     // Select the actual source, including syntax. Scroll without changing value or undo history.
-    const lineHeight = Number.parseFloat(getComputedStyle(area).lineHeight);
-    const line = area.value.slice(0, match.start).split("\n").length - 1;
-    area.scrollTop = Math.max(0, line * lineHeight - area.clientHeight / 2);
+    // Use the wrapped mirror's geometry; counting newline characters misses
+    // the visual rows in a long paragraph. Never mutate the native value.
+    const layer = mirror.current;
+    if (layer) {
+      const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+      let offset = match.start;
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const length = node.textContent?.length ?? 0;
+        if (offset < length) {
+          const range = document.createRange();
+          range.setStart(node, offset);
+          range.setEnd(node, offset + 1);
+          area.scrollTop = Math.max(0, layer.scrollTop + range.getBoundingClientRect().top - layer.getBoundingClientRect().top - area.clientHeight / 2);
+          break;
+        }
+        offset -= length;
+      }
+    }
     syncScroll();
     setFindStatus(`已找到“${query}”`);
   }
@@ -108,7 +125,7 @@ export default forwardRef<SourceEditorHandle, Props>(function SourceEditor(props
       <div className="source-mode"><strong>源码</strong><span role="status">{busy ? "处理中…" : dirty ? "未保存" : "已保存"}</span></div>
       <div className="source-actions">
         <button onClick={showFind} title={shortcutLabel("查找源码 (Ctrl+F)")} aria-label="查找源码"><Search /></button>
-        <button disabled={busy || compositionActive} onClick={() => void insertImage()}><ImagePlus /><span>插入图片</span></button>
+        {!isPlainText(path) && <button disabled={busy || compositionActive} onClick={() => void insertImage()}><ImagePlus /><span>插入图片</span></button>}
         <button disabled={busy || compositionActive || !dirty} onClick={onSave} title={shortcutLabel("保存 (Ctrl+S)")}><Save /><span>保存</span></button>
         <button disabled={busy || compositionActive} onClick={onExit}>返回阅读</button>
       </div>
@@ -128,13 +145,13 @@ export default forwardRef<SourceEditorHandle, Props>(function SourceEditor(props
     {error && <div className="source-error" role="alert">{error}</div>}
     <div className={`source-surface${compositionActive ? " is-composing" : ""}`}>
     <pre ref={mirror} className="source-colors" aria-hidden="true">{tokens.map((token, index) => <span key={index} className={token.kind ? `source-token-${token.kind}` : undefined}>{token.text}</span>)}<span>{"\u200b"}</span></pre>
-    <textarea ref={editor} className="source-input resize-none" aria-label="Markdown 源码" aria-describedby="source-editor-help" defaultValue={sourceText(initialContent)} readOnly={busy} wrap="off" spellCheck={false} autoComplete="off" autoCapitalize="off" autoCorrect="off" onScroll={syncScroll} onChange={(event) => changed(event.target.value)} onCompositionStart={() => { composing.current = true; setCompositionActive(true); }} onCompositionEnd={(event) => { composing.current = false; setCompositionActive(false); changed(event.currentTarget.value); }} onKeyDown={(event) => {
+    <textarea ref={editor} className="source-input resize-none" aria-label={isPlainText(path) ? "TXT 文本" : "Markdown 源码"} aria-describedby="source-editor-help" defaultValue={sourceText(initialContent)} readOnly={busy} wrap="soft" spellCheck={false} autoComplete="off" autoCapitalize="off" autoCorrect="off" onScroll={syncScroll} onChange={(event) => changed(event.target.value)} onCompositionStart={() => { composing.current = true; setCompositionActive(true); }} onCompositionEnd={(event) => { composing.current = false; setCompositionActive(false); changed(event.currentTarget.value); }} onKeyDown={(event) => {
       if (event.nativeEvent.isComposing || event.keyCode === 229) return;
       if (primaryModifier(event) && event.key.toLowerCase() === "f") { event.preventDefault(); event.stopPropagation(); showFind(); }
       if (primaryModifier(event) && event.key.toLowerCase() === "s") { event.preventDefault(); event.stopPropagation(); if (!busy) onSave(); }
       if (event.key === "Escape" && findOpen) { event.preventDefault(); event.stopPropagation(); setFindOpen(false); }
     }} />
     </div>
-    <div id="source-editor-help" className="source-editor-help">{shortcutLabel("Ctrl+S 保存 · Ctrl+Z 撤销 · Ctrl+Shift+Z / Ctrl+Y 重做")}<span>图片保存到当前文档的 images 文件夹</span></div>
+    <div id="source-editor-help" className="source-editor-help">{shortcutLabel("Ctrl+S 保存 · Ctrl+Z 撤销 · Ctrl+Shift+Z / Ctrl+Y 重做")}{!isPlainText(path) && <span>图片保存到当前文档的 images 文件夹</span>}</div>
   </section>;
 });

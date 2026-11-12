@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Plus, X, ExternalLink } from "lucide-react";
 import App, { type ReaderSession } from "./App";
@@ -20,6 +20,32 @@ export default function ReaderWorkspace() {
   latest.current = tabs;
   const leaveGuard = useRef<LeaveGuard | null>(null);
   const changing = useRef(false);
+  const tabList = useRef<HTMLDivElement | null>(null);
+  const tabScrollLeft = useRef(0);
+  const attachTabList = useCallback((element: HTMLDivElement | null) => {
+    // App is keyed by the active document, so its tab bar also remounts.
+    if (tabList.current) tabScrollLeft.current = tabList.current.scrollLeft;
+    tabList.current = element;
+    if (element) element.scrollLeft = tabScrollLeft.current;
+  }, []);
+  useLayoutEffect(() => {
+    const list = tabList.current;
+    const selected = list?.querySelector<HTMLElement>(".document-tab.active");
+    if (!list || !selected) return;
+    const reveal = () => {
+      const viewport = list.getBoundingClientRect();
+      const item = selected.getBoundingClientRect();
+      // Scroll only this strip; never move the article or steal keyboard focus.
+      if (item.left < viewport.left) list.scrollLeft += item.left - viewport.left;
+      else if (item.right > viewport.right) list.scrollLeft += Math.min(item.right - viewport.right, item.left - viewport.left);
+      tabScrollLeft.current = list.scrollLeft;
+    };
+    reveal();
+    const observer = new ResizeObserver(reveal);
+    observer.observe(list);
+    observer.observe(selected);
+    return () => observer.disconnect();
+  }, [active, tabs.length]);
   const registerLeaveGuard = useCallback((guard: LeaveGuard | null) => { leaveGuard.current = guard; }, []);
   const changeTab = useCallback(async (action: () => void) => {
     if (changing.current) return;
@@ -84,7 +110,7 @@ export default function ReaderWorkspace() {
   }, [active, closeTab, newTab]);
   const tab = tabs.find((item) => item.id === active)!;
   const bar = <div className="document-tabs">
-    <div role="tablist" aria-label="文档标签页" className="document-tab-list">
+    <div ref={attachTabList} role="tablist" aria-label="文档标签页" className="document-tab-list" onScroll={(event) => { tabScrollLeft.current = event.currentTarget.scrollLeft; }}>
       {tabs.map((item) => <div key={item.id} className={`document-tab ${item.id === active ? "active" : ""}`} onContextMenu={(event) => {
         const path = item.session?.path || item.initialPath;
         if (!path) return;

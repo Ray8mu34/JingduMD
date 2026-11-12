@@ -112,7 +112,7 @@ pub(crate) fn create_reader_window(app: &AppHandle, path: Option<String>) -> Res
     if let Some(path) = &path {
         let target = Path::new(path);
         if !target.is_dir() && !(target.is_file() && is_readable(target)) {
-            return Err("请选择 Markdown 文件或文件夹".into());
+            return Err("请选择 Markdown、TXT、Notebook 文件或文件夹".into());
         }
     }
     let label = format!(
@@ -286,6 +286,26 @@ mod tests {
         assert!(read_asset(state.clone(), document.clone(), image_path.clone()).is_err());
         registry.remove_window("main");
         assert!(read_asset(state, document, image_path).is_err());
+    }
+
+    #[test]
+    fn txt_opens_directly_and_from_the_current_folder() {
+        let files = Files::new();
+        let registry = registry();
+        let state = WindowState(registry.create("main/tab-txt", None));
+        let path = files.0.join("a/child/订阅.TXT");
+        let content = "# 纯文本\r\n  原样空格\r\nhttps://example.test/subscription";
+        fs::write(&path, GBK.encode(content).0.as_ref()).unwrap();
+        let path = to_string(&canonical(&path).unwrap());
+        open_target(state.clone(), to_string(&files.0.join("a/child/paper.md"))).unwrap();
+        let entries = list_directory(state.clone(), to_string(&files.0.join("a/child"))).unwrap();
+        assert!(entries.iter().any(|entry| entry.path == path));
+        assert_eq!(read_document(state.clone(), path.clone()).unwrap().content, content);
+        assert_eq!(search_text(Path::new(&path)).unwrap(), content);
+        let opened = open_target(state.clone(), path.clone()).unwrap();
+        assert_eq!(opened.selected_file, Some(path.clone()));
+        assert_eq!(read_document(state.clone(), path).unwrap().content, content);
+        assert!(read_document(state, to_string(&files.0.join("b/paper.md"))).is_err());
     }
 
     #[test]

@@ -82,6 +82,29 @@ export function notebookImage(bundle: unknown): string {
       if (mime === "image/png" ? bytes.startsWith("\x89PNG\r\n\x1a\n") : bytes.startsWith("\xff\xd8\xff")) return `data:${mime};base64,${value}`;
     } catch { /* Try the next supported representation. */ }
   }
+  const svg = notebookString(data["image/svg+xml"]);
+  if (svg) {
+    const parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
+    if (!parsed.querySelector("parsererror") && parsed.documentElement.localName === "svg"
+      && parsed.documentElement.namespaceURI === "http://www.w3.org/2000/svg") {
+      const clean = DOMPurify.sanitize(new XMLSerializer().serializeToString(parsed.documentElement), {
+        USE_PROFILES: { svg: true, svgFilters: true },
+        ADD_TAGS: ["use"],
+        FORBID_TAGS: ["foreignObject", "script", "animate", "animateMotion", "animateTransform", "set"],
+      });
+      // Keep SVG in an isolated image document, never inline in the reader DOM.
+      // Local references retain Matplotlib's reusable glyphs and clipping paths.
+      const image = new DOMParser().parseFromString(clean, "image/svg+xml");
+      if (!image.querySelector("parsererror") && image.documentElement.localName === "svg") {
+        for (const element of image.querySelectorAll("*")) {
+          for (const attribute of [...element.attributes]) {
+            if (attribute.localName === "href" && !attribute.value.trim().startsWith("#")) element.removeAttributeNode(attribute);
+          }
+        }
+        return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(image.documentElement))}`;
+      }
+    }
+  }
   return "";
 }
 

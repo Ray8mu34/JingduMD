@@ -15,6 +15,25 @@ const fixture = JSON.stringify({ nbformat: 4, metadata: { language_info: { name:
 ] });
 
 describe("static notebooks", () => {
+  it("renders saved SVG figures with reusable glyphs, clipping and Unicode", () => {
+    const svg = '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 50"><defs><path id="glyph" d="M0 0L5 5"/><clipPath id="plotClip"><rect width="100" height="50"/></clipPath></defs><g clip-path="url(#plotClip)"><use xlink:href="#glyph"/><text x="10" y="20">正态分布 μ</text></g></svg>';
+    const output = notebookOutput({ data: { "image/svg+xml": [svg], "text/plain": "<Figure size 450x250 with 1 Axes>" } });
+    expect(output.kind).toBe("image");
+    const decoded = decodeURIComponent(output.value.split(",")[1]);
+    expect(decoded).toContain('viewBox="0 0 100 50"');
+    expect(decoded).toContain('xlink:href="#glyph"');
+    expect(decoded).toContain('url(#plotClip)');
+    expect(decoded).toContain("正态分布 μ");
+  });
+  it("cleans active SVG content and falls back for malformed SVG", () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(1)</script><foreignObject><div>unsafe</div></foreignObject><image href="https://example.com/tracker.png"/><path id="curve" d="M0 0L1 1"/></svg>';
+    const output = notebookOutput({ data: { "image/svg+xml": svg } });
+    expect(output.kind).toBe("image");
+    const decoded = decodeURIComponent(output.value.split(",")[1]);
+    expect(decoded).not.toMatch(/onload|script|foreignObject|https:\/\/example/);
+    expect(decoded).toContain('id="curve"');
+    expect(notebookOutput({ data: { "image/svg+xml": '<svg><broken>', "text/plain": "fallback" } })).toEqual({ kind: "text", value: "fallback" });
+  });
   it("renders Jupyter display equations like Markdown display fences without swallowing prose", () => {
     const source = "# 解析解\n\n行内 $w$。\n\n$$L(w)=\\frac{1}{n}\\sum_i l_i$$\n\n$$\\begin{aligned}\n w &= x \\\\\n b &= y\n\\end{aligned}$$\n\n## 小批量随机梯度下降\n\n公式之后的正文。";
     const content = JSON.stringify({ nbformat: 4, cells: [{ cell_type: "markdown", source }] });

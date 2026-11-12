@@ -468,7 +468,11 @@ fn sqlite_storage_bytes(path: &Path) -> u64 {
 }
 
 fn is_readable(path: &Path) -> bool {
-    is_markdown(path) || notebook::is_notebook(path)
+    is_markdown(path) || is_plain_text(path) || notebook::is_notebook(path)
+}
+
+fn is_plain_text(path: &Path) -> bool {
+    path.extension().and_then(OsStr::to_str).is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
 }
 
 fn search_text(path: &Path) -> Result<String, String> {
@@ -556,7 +560,7 @@ fn open_target(state: WindowState, path: String) -> Result<OpenTarget, String> {
     let target = canonical(&path)?;
     let (root, selected_file) = if target.is_file() {
         if !is_readable(&target) {
-            return Err("首版只支持 Markdown 文件".into());
+            return Err("支持 Markdown、TXT 和 Notebook 文件".into());
         }
         (
             target.parent().ok_or("无法确定文件所在目录")?.to_path_buf(),
@@ -649,7 +653,7 @@ fn list_directory(state: WindowState, path: String) -> Result<Vec<DirectoryEntry
 fn read_document(state: WindowState, path: String) -> Result<DocumentPayload, String> {
     let file = guarded_path(&state, &path)?;
     if !file.is_file() || !is_readable(&file) {
-        return Err("目标不是 Markdown 或 Notebook 文件".into());
+        return Err("目标不是 Markdown、TXT 或 Notebook 文件".into());
     }
     let metadata = fs::metadata(&file).map_err(|e| e.to_string())?;
     if metadata.len() > 64 * 1024 * 1024 {
@@ -658,7 +662,7 @@ fn read_document(state: WindowState, path: String) -> Result<DocumentPayload, St
     let bytes = fs::read(&file).map_err(|e| format!("读取失败：{e}"))?;
     let content = decode_text(&bytes);
     let root = state.current_root.lock().clone().ok_or("尚未打开文件夹")?;
-    if !notebook::is_notebook(&file) { annotations::observe(
+    if is_markdown(&file) { annotations::observe(
         &state.db.lock(),
         &to_string(&file),
         &to_string(&root),
@@ -686,7 +690,7 @@ fn read_asset(
 ) -> Result<AssetPayload, String> {
     let document = guarded_path(&state, &document_path)?;
     if !document.is_file() || !is_readable(&document) {
-        return Err("目标不是 Markdown 或 Notebook 文件".into());
+        return Err("目标不是 Markdown、TXT 或 Notebook 文件".into());
     }
     // Images may live outside the opened folder (e.g. ../../assets/01/relations.png).
     // Keep the document scoped to this tab, and only relax the image path boundary.
@@ -2488,6 +2492,10 @@ mod tests {
         assert!(is_markdown(Path::new("README.MD")));
         assert!(is_markdown(Path::new("notes.markdown")));
         assert!(!is_markdown(Path::new("notes.txt")));
+        assert!(is_readable(Path::new("订阅.txt")));
+        assert!(is_readable(Path::new("NOTES.TXT")));
+        assert!(is_readable(Path::new("notes.ipynb")));
+        assert!(!is_readable(Path::new("program.exe")));
     }
     #[test]
     #[cfg(target_os = "windows")]
