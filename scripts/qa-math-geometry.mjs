@@ -8,6 +8,8 @@ try {
   const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
   await page.goto(`${server.resolvedUrls.local[0]}qa-app.html`);
   await page.locator(".markdown-body h1").waitFor();
+  // Wait for the initial debounced preference commit before reading saves.at(-1).
+  await page.waitForFunction(() => window.__JINGREADER_QA__.saves.length > 0);
   const formulas = page.locator(".markdown-body .lazy-math.math-display");
   for (let index = 0; index < await formulas.count(); index++) {
     const formula = formulas.nth(index);
@@ -72,8 +74,8 @@ try {
   const contentProof = await page.evaluate(() => {
     const inline = document.querySelector(".lazy-math.math-inline");
     const article = document.querySelector(".markdown-body");
-    const tag = [...document.querySelectorAll(".katex-mathml annotation")].find((node) => node.textContent.includes("\\tag"));
-    return { inlineHeight: inline.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(article).lineHeight), tag: tag?.textContent ?? "" };
+    const tag = [...document.querySelectorAll('.lazy-math > [role="math"][aria-label]')].find(node => node.getAttribute("aria-label").includes("\\tag"));
+    return { inlineHeight: inline.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(article).lineHeight), tag: tag?.getAttribute("aria-label") ?? "" };
   });
   if (contentProof.inlineHeight > contentProof.lineHeight * 1.5 || !contentProof.tag.includes("原文 1")) throw new Error(`inline math or author tag was lost: ${JSON.stringify(contentProof)}`);
   const cdp = await page.context().newCDPSession(page);

@@ -16,7 +16,7 @@ import FileTree from "./components/FileTree";
 import ResizableSidebar from "./components/ResizableSidebar";
 import { fitSidebars, READER_MIN, SIDEBAR_MAX, SIDEBAR_MIN } from "./lib/sidebarSizing";
 import { useSidebarWidths } from "./lib/useSidebarWidths";
-import { isNotebook, parseNotebook, notebookOutline, notebookBody } from "./lib/notebook";
+import { isNotebook, notebookSnapshot, notebookOutline, notebookBody } from "./lib/notebook";
 import { isPlainText } from "./lib/documentFormat";
 import MarkdownReader from "./components/MarkdownReader";
 import SourceEditor, { type SourceEditorHandle } from "./components/SourceEditor";
@@ -30,7 +30,7 @@ import HighlightToolbar from "./components/HighlightToolbar";
 import { clearFindHighlights, findTextRanges, scrollToRange, updateFindHighlights } from "./lib/find";
 import {
   clearTextHighlights, HIGHLIGHT_COLORS, HIGHLIGHT_COLOR_LABELS, highlightAtPoint, paintHighlights, resolveHighlights,
-  scrollToHighlight, selectionToHighlight
+  scrollToHighlight, selectionToHighlight, highlightMutationsMatter
 } from "./lib/highlights";
 import { readerPresentation } from "./lib/readerPresentation";
 import { loadFontCatalog } from "./lib/fontCatalog";
@@ -138,6 +138,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   const [deletedHighlight, setDeletedHighlight] = useState<{ id: number; path: string; before?: string; after?: string } | null>(null);
   const selectionDraft = useRef<HighlightPopover | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const readerHeadings = useRef<HTMLElement[]>([]);
   const settingsTrigger = useRef<HTMLButtonElement>(null);
   const openMenuTrigger = useRef<HTMLButtonElement>(null);
   const moreTrigger = useRef<HTMLButtonElement>(null);
@@ -173,7 +174,8 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   const presentedPath = useRef<string | null>(null);
   const pendingAnchor = useRef<{ path: string; anchor: TextAnchor } | null>(null);
   const liveAnchor = useRef<{ path: string; generation: number; anchor: TextAnchor } | null>(null);
-  const notebook = useMemo(() => { if (!doc || !isNotebook(doc.path)) return null; try { return parseNotebook(doc.content); } catch { return null; } }, [doc]);
+  const parsedNotebook = useMemo(() => notebookSnapshot(doc), [doc]);
+  const notebook = parsedNotebook?.data ?? null;
   const notebookDocument = !!doc && isNotebook(doc.path);
   const outline = useMemo(() => notebook ? notebookOutline(notebook) : doc && !isNotebook(doc.path) && !isPlainText(doc.path) ? extractOutline(parseFileHighlights(doc.content).clean) : [], [doc]);
   const metrics = useMemo(() => doc ? readingMetrics(notebook ? notebookBody(notebook) : isNotebook(doc.path) ? "" : doc.content) : null, [doc]);
@@ -445,12 +447,19 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     void invoke<RecentRoot[]>("list_recent_roots").then(setRecentRoots).catch(() => undefined);
   }, []);
 
+  useLayoutEffect(() => {
+    // Formulas can add hundreds of thousands of descendants without changing
+    // the headings. Query once per document, not once per animation frame.
+    readerHeadings.current = scrollRef.current ? sourceHeadings(scrollRef.current) : [];
+    return () => { readerHeadings.current = []; };
+  }, [doc]);
+
   const updateReadingTelemetry = useCallback(() => {
     const container = scrollRef.current;
     if (!container) return;
     const maximum = Math.max(1, container.scrollHeight - container.clientHeight);
     setReadingProgress(Math.max(0, Math.min(1, container.scrollTop / maximum)));
-    const headings = sourceHeadings(container);
+    const headings = readerHeadings.current;
     const top = container.scrollTop + Math.min(120, container.clientHeight * 0.18);
     let active = headings[0];
     for (const heading of headings) { if (heading.offsetTop <= top) active = heading; else break; }
@@ -527,7 +536,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     const container = scrollRef.current;
     const state = positionState.current;
     if (!container || documentRef.current?.path !== path || state?.path !== path || !state.ready || state.readPending || state.readFailed) return;
-    const headings = sourceHeadings(container);
+    const headings = readerHeadings.current;
     const top = container.scrollTop + 24;
     let active: HTMLElement | undefined;
     for (const heading of headings) { if (heading.offsetTop <= top) active = heading; else break; }
@@ -720,12 +729,19 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
   useEffect(() => {
     let cancelled = false;
     let frame = 0;
+    const native = doc && !isPlainText(doc.path) ? documentHighlightRecords(doc.content, doc.path, rootRef.current ?? "", notebook) : [];
+    const records = [...highlights, ...native];
+    if (!records.length) {
+      setResolvedHighlights([]);
+      clearTextHighlights();
+      return;
+    }
+    const legacy = records.some(record => record.id >= 0);
     const resolveAndPaint = () => {
       frame = 0;
       if (cancelled) return;
       const article = scrollRef.current?.querySelector<HTMLElement>(".markdown-body");
-      const native = doc && !isPlainText(doc.path) ? documentHighlightRecords(doc.content, doc.path, rootRef.current ?? "") : [];
-      const resolved = article ? resolveHighlights(article, [...highlights, ...native]) : [];
+      const resolved = article ? resolveHighlights(article, records) : [];
       setResolvedHighlights(resolved);
       paintHighlights(resolved);
       const pending = pendingHighlightId.current;
@@ -739,10 +755,10 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
     };
     schedule();
     const article = scrollRef.current?.querySelector<HTMLElement>(".markdown-body");
-    const observer = article ? new MutationObserver(schedule) : null;
+    const observer = article ? new MutationObserver(mutations => { if (highlightMutationsMatter(mutations, legacy)) schedule(); }) : null;
     observer?.observe(article!, { childList: true, subtree: true, characterData: true });
     return () => { cancelled = true; observer?.disconnect(); if (frame) window.cancelAnimationFrame(frame); clearTextHighlights(); };
-  }, [doc, highlights]);
+  }, [doc, highlights, notebook]);
 
   useEffect(() => {
     if (!isTauri() || initialized.current) return;
@@ -1093,7 +1109,7 @@ export default function App({ session, initialPath, onSessionChange, onNewTab, t
           <button onClick={() => setFindOpen(false)} title="关闭"><X /></button>
         </div>}
         {doc ? <div ref={scrollRef} className="reader-scroll" aria-hidden={source.draft ? true : undefined} style={readerStyle} onScroll={() => { saveReadingPosition(); setHighlightPopover(null); }} onWheel={() => { userScrollGeneration.current++; }} onTouchStart={() => { userScrollGeneration.current++; }} onPointerDown={() => { userScrollGeneration.current++; }} onKeyDown={() => { userScrollGeneration.current++; }} onMouseUp={handleReaderMouseUp} onContextMenu={(event) => { if (!globalThis.getSelection()?.isCollapsed) { event.preventDefault(); captureHighlightSelection(true); } }}>
-          <MarkdownReader document={doc} night={presentation.night} showFrontmatter={preferences.showFrontmatter} remoteImagePolicy={preferences.remoteImagePolicy} allowedRemoteHosts={preferences.allowedRemoteHosts} onAllowRemoteHost={allowRemoteHost} onOpenDocument={openDocument} onError={notify} />
+          <MarkdownReader document={doc} parsedNotebook={parsedNotebook} night={presentation.night} showFrontmatter={preferences.showFrontmatter} remoteImagePolicy={preferences.remoteImagePolicy} allowedRemoteHosts={preferences.allowedRemoteHosts} onAllowRemoteHost={allowRemoteHost} onOpenDocument={openDocument} onError={notify} />
         </div> : <div className="welcome">
           {root ? <><h1>选择一篇文档</h1><p>{!sidebarsHidden && (narrow ? narrowTreeOpen : showTree) ? "从左侧选择一篇文档，开始阅读。" : "从文件列表中选择要阅读的 Markdown 文件。"}</p>{(sidebarsHidden || !(narrow ? narrowTreeOpen : showTree)) && <button className="primary" onClick={() => { setFocusMode(false); if (narrow) setNarrowTreeOpen(true); else setShowTree(true); }}>打开文件列表</button>}</>
             : <><h1>打开 Markdown 开始阅读</h1><div className="welcome-actions"><button className="primary" onClick={() => void chooseFile()}><FileText />打开文件</button><button onClick={() => void chooseFolder()}><FolderOpen />打开文件夹</button></div></>}

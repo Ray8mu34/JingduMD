@@ -1,5 +1,5 @@
 import { render, fireEvent } from "@testing-library/react";
-import { notebookBody, notebookOutline, notebookOutput, parseNotebook, sanitizeNotebookTable, normalizeNotebookMarkdown } from "./notebook";
+import { notebookBody, notebookOutline, notebookOutput, parseNotebook, notebookSnapshot, sanitizeNotebookTable, normalizeNotebookMarkdown } from "./notebook";
 import MarkdownReader from "../components/MarkdownReader";
 import { findTextRanges } from "./find";
 
@@ -15,6 +15,18 @@ const fixture = JSON.stringify({ nbformat: 4, metadata: { language_info: { name:
 ] });
 
 describe("static notebooks", () => {
+  it("shares one document parse and invalidates it when the source changes", () => {
+    const doc = { path: "shared.ipynb", name: "shared.ipynb", content: fixture, size: fixture.length, modifiedMs: 0 };
+    const first = notebookSnapshot(doc);
+    expect(first?.data?.cells.length).toBe(6);
+    expect(notebookSnapshot(doc)).toBe(first);
+    doc.content = JSON.stringify({ nbformat: 4, cells: [] });
+    expect(notebookSnapshot(doc)).not.toBe(first);
+    expect(notebookSnapshot(doc)?.data?.cells).toEqual([]);
+    doc.content = "{";
+    expect(notebookSnapshot(doc)?.error).toMatch(/JSON/);
+    expect(notebookSnapshot(null)).toBeNull();
+  });
   it("renders saved SVG figures with reusable glyphs, clipping and Unicode", () => {
     const svg = '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 50"><defs><path id="glyph" d="M0 0L5 5"/><clipPath id="plotClip"><rect width="100" height="50"/></clipPath></defs><g clip-path="url(#plotClip)"><use xlink:href="#glyph"/><text x="10" y="20">正态分布 μ</text></g></svg>';
     const output = notebookOutput({ data: { "image/svg+xml": [svg], "text/plain": "<Figure size 450x250 with 1 Axes>" } });

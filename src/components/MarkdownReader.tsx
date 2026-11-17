@@ -10,7 +10,9 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { PluggableList } from "unified";
 import DOMPurify from "dompurify";
-import katex from "katex";
+import { renderMathHtml } from "../lib/mathRendering";
+import { compileMath } from "../lib/mathCompiler";
+import { observeContent, subscribeContentPrint } from "../lib/visibleContent";
 import { useTabInvoke } from "../lib/tabContext";
 import { enrichCodeColors } from "../lib/codeColor";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -25,7 +27,7 @@ import { isAnimatedSvg, rasterizeSvg } from "../lib/svgRaster";
 import { remarkCallouts, remarkHeadingIds, remarkImageLayout, remarkSanitizeHtml, remarkWikiLinks } from "../lib/markdown";
 import { prepareFileHighlights } from "../lib/fileHighlights";
 import { notebookHighlightCells, prepareNotebookCell } from "../lib/notebookHighlights";
-import { isNotebook, parseNotebook, notebookImage, notebookOutline, type Notebook } from "../lib/notebook";
+import { notebookSnapshot, notebookImage, notebookOutline, type Notebook, type NotebookSnapshot } from "../lib/notebook";
 import { visit } from "unist-util-visit";
 import type { Root } from "mdast";
 
@@ -76,21 +78,16 @@ function NotebookCellImage(props: ComponentPropsWithoutRef<"img"> & ExtraProps) 
 function useVisible<T extends HTMLElement>(rootMargin = "500px", eager = false) {
   const ref = useRef<T>(null);
   const [visible, setVisible] = useState(eager);
+  const [printing, setPrinting] = useState(false);
   useEffect(() => {
     const target = ref.current;
     if (!target || eager) return;
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) { setVisible(true); observer.disconnect(); }
-    }, { rootMargin });
-    observer.observe(target);
-    return () => observer.disconnect();
+    return observeContent(target, rootMargin, () => setVisible(true));
   }, [eager, rootMargin]);
   useEffect(() => {
-    const reveal = () => setVisible(true);
-    window.addEventListener("jingreader:expand-for-print", reveal);
-    return () => window.removeEventListener("jingreader:expand-for-print", reveal);
+    return subscribeContentPrint(active => { if (active) setVisible(true); setPrinting(active); });
   }, []);
-  return { ref, visible };
+  return { ref, visible, printing };
 }
 
 type RemoteImagePolicy = "ask" | "allow" | "block";
@@ -427,18 +424,34 @@ function LazyCode({ language, value, loadMargin }: { language: string; value: st
 }
 
 function LazyMath({ source, display, loadMargin, eager }: { source: string; display: boolean; loadMargin: string; eager: boolean }) {
-  const { ref, visible } = useVisible<HTMLElement>(loadMargin, eager);
+  const { ref, visible, printing } = useVisible<HTMLElement>(loadMargin, eager);
+  const [prepared, setPrepared] = useState<{ source: string; display: boolean; html: string } | null>(null);
+  const retained = useRef<typeof prepared>(null);
+  useEffect(() => {
+    if (eager || printing || !visible || (retained.current?.source === source && retained.current.display === display)) return;
+    const controller = new AbortController();
+    void compileMath(source, display, controller.signal).then(html => {
+      if (html === null || controller.signal.aborted) return;
+      return scheduleMediaWork(async () => { setPrepared({ source, display, html }); }, controller.signal);
+    });
+    return () => controller.abort();
+  }, [source, display, visible, eager, printing, prepared]);
   // Ordinary articles need final formula geometry on their first layout. Swapping
   // TeX for KaTeX while reading changes both line wrapping and anchor text offsets.
-  const html = useMemo(() => eager || visible
-    ? katex.renderToString(source, { displayMode: display, throwOnError: false, strict: "warn", trust: false })
-      .replace('class="katex-mathml"', 'class="katex-mathml" aria-hidden="true"')
-    : "", [display, eager, source, visible]);
+  const html = useMemo(() => {
+    const ready = prepared?.source === source && prepared.display === display ? prepared : retained.current;
+    const result = eager || printing ? renderMathHtml(source, display)
+      : ready?.source === source && ready.display === display ? ready.html : "";
+    // Printing prepares the whole book synchronously. Keep that geometry when
+    // leaving print mode, rather than flashing TeX and compiling it again.
+    if (result) retained.current = { source, display, html: result };
+    return result;
+  }, [display, eager, source, printing, prepared]);
   return <span ref={ref} className={display ? `lazy-math math-display ${source.length > 90 ? "is-wide" : ""}` : "lazy-math math-inline"}
     {...(display ? { role: "region", "aria-label": "数学公式，可横向滚动", tabIndex: 0 } : {})}>
     {/* Expose one named math object. Expanding every MathML glyph into Windows
         UIA nodes can stall native selection/scrolling in formula-heavy articles.
-        Retain the MathML markup for document consumers and export tooling. */}
+        The raw TeX remains available in the accessible name. */}
     {html ? <span role="math" aria-label={source} dangerouslySetInnerHTML={{ __html: html }} /> : source}
   </span>;
 }
@@ -497,6 +510,7 @@ function MermaidBlock({ source, loadMargin }: { source: string; loadMargin: stri
 
 type Props = {
   document: DocumentPayload;
+  parsedNotebook?: NotebookSnapshot | null;
   night: boolean;
   showFrontmatter?: boolean;
   remoteImagePolicy?: RemoteImagePolicy;
@@ -541,18 +555,14 @@ export function documentRenderTier(content: string): "normal" | "long" | "extrem
 }
 
 export default function MarkdownReader({
-  document: doc, night, showFrontmatter = true, remoteImagePolicy = "ask", allowedRemoteHosts = EMPTY_REMOTE_HOSTS,
+  document: doc, parsedNotebook, night, showFrontmatter = true, remoteImagePolicy = "ask", allowedRemoteHosts = EMPTY_REMOTE_HOSTS,
   onAllowRemoteHost = ignoreRemoteHost, onOpenDocument, onError
 }: Props) {
   // Callback/policy changes must not change React component types: doing so
   // unmounts every image, briefly collapses its height, and moves the reader.
   const options = useRef({ remoteImagePolicy, allowedRemoteHosts, onAllowRemoteHost, onOpenDocument, onError });
   options.current = { remoteImagePolicy, allowedRemoteHosts, onAllowRemoteHost, onOpenDocument, onError };
-  const notebook = useMemo<{ data?: Notebook; error?: string } | null>(() => {
-    if (!isNotebook(doc.path)) return null;
-    try { return { data: parseNotebook(doc.content) }; }
-    catch (error) { return { error: String(error instanceof Error ? error.message : error) }; }
-  }, [doc.path, doc.content]);
+  const notebook = useMemo(() => parsedNotebook === undefined ? notebookSnapshot(doc) : parsedNotebook, [doc, doc.path, doc.content, parsedNotebook]);
   const renderTier = useMemo(() => documentRenderTier(notebook?.data ? notebook.data.cells.map(cell => cell.source).join("\n") : doc.content), [doc.content, notebook]);
   const loadMargin = renderTier === "extreme" ? "80px" : "500px";
   const parsed = useMemo(() => {

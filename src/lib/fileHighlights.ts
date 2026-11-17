@@ -254,19 +254,31 @@ export function selectedTextOffsets(range: Range, node: globalThis.Text): { star
 }
 
 export function sourceSelections(root: HTMLElement, selection: Selection): { start: number; end: number }[] {
-  if (selection.rangeCount !== 1) return [];
+  if (selection.rangeCount !== 1 || selection.isCollapsed) return [];
   const range = selection.getRangeAt(0);
   if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return [];
   const result: { start: number; end: number }[] = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) {
-    const node = walker.currentNode as globalThis.Text;
+  const collect = (node: globalThis.Text) => {
     const span = node.parentElement?.closest<HTMLElement>("[data-source-start]");
-    if (!span || span.firstChild !== node || span.childNodes.length !== 1) continue;
+    if (!span || span.firstChild !== node || span.childNodes.length !== 1) return;
     const selected = selectedTextOffsets(range, node);
-    if (!selected) continue;
+    if (!selected) return;
     const offset = Number(span.dataset.sourceStart);
     result.push({ start: offset + selected.start, end: offset + selected.end });
+  };
+  // Most selections are inside one paragraph or even one text node. Walking the
+  // article visits every KaTeX glyph in the book just to map that single line.
+  const common = range.commonAncestorContainer;
+  if (common.nodeType === Node.TEXT_NODE) collect(common as globalThis.Text);
+  else {
+    const walker = document.createTreeWalker(common, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (!range.intersectsNode(node)) return NodeFilter.FILTER_REJECT;
+        if (node.nodeType === Node.ELEMENT_NODE) return (node as Element).matches(".lazy-math") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    while (walker.nextNode()) collect(walker.currentNode as globalThis.Text);
   }
   return result;
 }

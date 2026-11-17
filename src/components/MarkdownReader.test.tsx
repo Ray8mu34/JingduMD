@@ -47,13 +47,39 @@ describe("MarkdownReader mathematics", () => {
   });
   it("lays out all ordinary-article formulas before viewport observation", () => {
     const observer = globalThis.IntersectionObserver;
-    globalThis.IntersectionObserver = class { observe() {} disconnect() {} } as unknown as typeof IntersectionObserver;
+    globalThis.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof IntersectionObserver;
     try {
       const content = "# Cold article\n\nInline $x$.\n\n" + "Paragraph.\n\n".repeat(200) + "$$\\frac{1}{2}$$";
       const document: DocumentPayload = { path: "cold.md", name: "cold.md", modifiedMs: 0, size: content.length, content };
       const { container } = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
       expect(container.querySelectorAll(".lazy-math .katex")).toHaveLength(2);
     } finally { globalThis.IntersectionObserver = observer; }
+  });
+  it("defers long-document formula insertion throughout pointer selection", async () => {
+    const content = "# Long formulas\n\n$x^2 + 98765$\n\n" + "正文".repeat(40_000);
+    const view = render(<div className="reader-scroll"><MarkdownReader document={{ path: "long-math.md", name: "long-math.md", content, size: content.length, modifiedMs: 0 }} night={false} onOpenDocument={() => {}} /></div>);
+    try {
+      const reader = view.container.querySelector(".reader-scroll")!;
+      reader.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+      await new Promise(resolve => setTimeout(resolve, 220));
+      expect(view.container.querySelector(".katex")).toBeNull();
+      window.dispatchEvent(new Event("pointerup"));
+      await waitFor(() => expect(view.container.querySelector(".katex")).not.toBeNull());
+    } finally { window.dispatchEvent(new Event("pointerup")); view.unmount(); }
+  });
+  it("renders offscreen formulas immediately for print and retains them after print", () => {
+    const original = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof IntersectionObserver;
+    const content = "# Print formulas\n\n$print^2$\n\n" + "正文".repeat(40_000);
+    const view = render(<MarkdownReader document={{ path: "print-math.md", name: "print-math.md", content, size: content.length, modifiedMs: 0 }} night={false} onOpenDocument={() => {}} />);
+    try {
+      expect(view.container.querySelector(".katex")).toBeNull();
+      fireEvent(window, new Event("jingreader:expand-for-print"));
+      const formula = view.container.querySelector(".katex");
+      expect(formula).not.toBeNull();
+      fireEvent(window, new Event("jingreader:restore-after-print"));
+      expect(view.container.querySelector(".katex")).toBe(formula);
+    } finally { view.unmount(); globalThis.IntersectionObserver = original; }
   });
   it("loads an image two directories above the document using its tab and document context", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({ mime: "image/png", data: [137, 80, 78, 71, 13, 10, 26, 10] });
@@ -161,7 +187,7 @@ describe("MarkdownReader mathematics", () => {
 
   it("keeps notebook SVG data images lazy until they approach the viewport", () => {
     const observer = globalThis.IntersectionObserver;
-    globalThis.IntersectionObserver = class { observe() {} disconnect() {} } as unknown as typeof IntersectionObserver;
+    globalThis.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof IntersectionObserver;
     try {
       const view = render(<MarkdownReader document={svgNotebook} night={false} onOpenDocument={() => {}} />);
       expect(view.container.querySelector("img")).toBeNull();
@@ -210,8 +236,8 @@ describe("MarkdownReader mathematics", () => {
     const view = render(<MarkdownReader document={document} night={false} onOpenDocument={() => {}} />);
     expect(view.container.querySelector('[role="math"][aria-label="x^2"]')).toBeInTheDocument();
     expect(view.container.querySelector('[role="math"][aria-label="y=1"]')).toBeInTheDocument();
-    expect(view.container.querySelectorAll('.katex-mathml[aria-hidden="true"]')).toHaveLength(2);
-    expect(view.container.querySelectorAll(".katex-mathml math")).toHaveLength(2);
+    expect(view.container.querySelectorAll(".katex-mathml, math")).toHaveLength(0);
+    expect(view.container.querySelectorAll(".katex-html")).toHaveLength(2);
   });
 
   it("does not request a remote image before the user allows its host", () => {

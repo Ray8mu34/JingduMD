@@ -26,4 +26,6 @@ Notebook 静态读取 nbformat 4；全文源码编辑和图片复制仍限定 Ma
 
 SVG 正文显示由 MarkdownReader、mediaWorkQueue.ts 与 svgRaster.ts 共同负责：保持原始逻辑尺寸和缩放偏好，静态图以临时位图参与正文绘制，预览与打印保留原始 SVG。切换文档或取消任务后，不发布过期结果，释放原图与位图对象 URL；转换失败退回 SVG，不影响远程图片授权。验证：mediaWorkQueue.test.ts、svgRaster.test.ts、MarkdownReader.test.tsx，以及 `node scripts/qa-svg-selection.mjs <Markdown 路径> [WebView2 CDP 地址]` 的连续鼠标拖选与逐帧选区变化记录。
 
-密集公式文档使用整条公式的 `role=math` 与 TeX 说明，隐藏 KaTeX MathML 的无障碍展开，保留原始 MathML DOM 和视觉排版。该模式保留整条公式说明，不提供 MathML 内部逐项导航。验证：MarkdownReader.test.tsx、qa-math-geometry.mjs，以及原生 WebView2 的 AX 树规模、accessibility 跟踪与用户连续拖选对比。
+密集公式文档使用整条公式的 `role=math` 与 TeX 说明，KaTeX 只生成视觉 HTML，避免额外隐藏 MathML DOM。该模式保留整条公式说明与视觉排版，不提供 MathML 内部逐项导航。验证：MarkdownReader.test.tsx、mathRendering.test.ts、qa-math-geometry.mjs、qa-performance-next.mjs；原生 WebView2 连续拖选的体验仍需实际窗口验证。
+
+长文的公式编译由共享 Worker 执行，DOM 更新让位于滚动与鼠标拖选；Worker 不可用时通过同一空闲队列回退。过期内容取消排队并丢弃正在计算的结果。可见性观察器共用，打印同步展开且退出打印后不闪回 TeX。验证：mathCompiler.test.ts、visibleContent.test.ts、MarkdownReader.test.tsx，并使用合并讲义在 WebView2 中测量已加载区域的滚动与拖选。

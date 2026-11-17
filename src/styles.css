@@ -306,7 +306,7 @@ button { color: inherit; }
 .font-serif .markdown-body { font-family: Georgia, "Noto Serif SC", "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, serif; }
 .font-sans .markdown-body, .theme-technical .markdown-body { font-family: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif; }
 .reader-scroll .markdown-body { font-family: var(--reader-font, inherit); }
-.markdown-body.long-document > :is(p, ul, ol, blockquote, pre, .code-block, .table-scroll, hr, details, .image-frame, .mermaid-block, .katex-display) {
+.markdown-body.long-document > :is(p, ul, ol, blockquote, pre, .code-block, .table-scroll, .table-frame, hr, details, .image-frame, .mermaid-block, .math-display) {
   content-visibility: auto;
   contain-intrinsic-size: auto 5em;
 }
@@ -519,6 +519,7 @@ button { color: inherit; }
   .topbar, .qa-toolbar, .left-sidebar, .right-sidebar, .reading-progress-track, .find-bar, .document-footer, .edge-toggle, .toast, .highlight-popover, .image-actions, .section-fold-button, .code-block-toolbar button, .callout-heading svg { display: none !important; }
   .markdown-body { width: auto !important; max-width: none !important; margin: 0 !important; padding: 0 !important; color: #292724 !important; font-size: 11.5pt !important; line-height: 1.72 !important; }
   .markdown-body, .markdown-body * { filter: none !important; text-shadow: none !important; }
+  .markdown-body.long-document > * { content-visibility: visible !important; contain-intrinsic-size: none !important; }
   [data-section-hidden] { display: revert !important; }
   .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 { color: #222 !important; break-after: avoid-page; }
   .markdown-body p, .markdown-body li { orphans: 3; widows: 3; }

@@ -1,5 +1,5 @@
 import { fileHighlightRecords, matchingFileHighlight, parseFileHighlights, prepareFileHighlights, serializeFileHighlights, type FileHighlight } from "./fileHighlights";
-import { isNotebook, normalizeNotebookSource, notebookString, type NotebookCell } from "./notebook";
+import { isNotebook, normalizeNotebookSource, notebookString, type Notebook, type NotebookCell } from "./notebook";
 
 /** Session-local offsets/IDs only. Persistent marks live in each cell's source. */
 export function notebookHighlightCells(cells: NotebookCell[]) {
@@ -102,6 +102,14 @@ export function documentHighlights(content: string, path: string, root = "") {
     serialize: (next: FileHighlight[]) => serializeFileHighlights(clean, next) };
 }
 
-export function documentHighlightRecords(content: string, path: string, root: string) {
-  try { return documentHighlights(content, path, root).records; } catch { return []; }
+export function documentHighlightRecords(content: string, path: string, root: string, notebook?: Notebook | null) {
+  try {
+    if (isNotebook(path) && notebook) {
+      return notebookHighlightCells(notebook.cells).flatMap(cell => cell
+        ? fileHighlightRecords(cell.source, path, root, normalizeNotebookSource).map(record => ({
+          ...record, id: record.id - cell.idOffset, startOffset: record.startOffset + cell.offset, endOffset: record.endOffset + cell.offset
+        })) : []);
+    }
+    return documentHighlights(content, path, root).records;
+  } catch { return []; }
 }

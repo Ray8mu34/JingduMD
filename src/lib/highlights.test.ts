@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { articleTextMap, highlightAtPoint, rangeForOffsets, resolveHighlight, selectionToHighlight } from "./highlights";
+import { articleTextMap, highlightAtPoint, rangeForOffsets, resolveHighlight, resolveHighlights, selectionToHighlight, highlightMutationsMatter } from "./highlights";
 import type { TextHighlight } from "../types";
 
 function stored(overrides: Partial<TextHighlight> = {}): TextHighlight {
@@ -10,6 +10,43 @@ function stored(overrides: Partial<TextHighlight> = {}): TextHighlight {
 }
 
 describe("text highlight anchoring", () => {
+  it("does not traverse article text for empty or file-native highlights", () => {
+    const root = document.createElement("article");
+    root.innerHTML = '<p><span data-file-highlight="-1 -2">重点内容</span></p>';
+    const walker = vi.spyOn(document, "createTreeWalker");
+    try {
+      expect(resolveHighlights(root, [])).toEqual([]);
+      const resolved = resolveHighlights(root, [stored({ id: -1 }), stored({ id: -2 })]);
+      expect(resolved.map(item => item.range?.toString())).toEqual(["重点内容", "重点内容"]);
+      expect(walker).not.toHaveBeenCalled();
+    } finally { walker.mockRestore(); }
+  });
+
+  it("ignores hidden formula repainting but observes prose changes for legacy marks", () => {
+    const root = document.createElement("article");
+    root.innerHTML = '<p>正文</p><span aria-hidden="true"><span>公式字形</span></span>';
+    const observer = new MutationObserver(() => {});
+    observer.observe(root, { subtree: true, childList: true, characterData: true });
+    root.querySelector('[aria-hidden="true"] span')!.textContent = "更新字形";
+    expect(highlightMutationsMatter(observer.takeRecords(), true)).toBe(false);
+    root.querySelector("p")!.textContent = "更新正文";
+    const changes = observer.takeRecords();
+    expect(highlightMutationsMatter(changes, true)).toBe(true);
+    expect(highlightMutationsMatter(changes, false)).toBe(false);
+    observer.disconnect();
+  });
+
+  it("rebuilds native ranges when highlighted content is removed or replaced", () => {
+    const root = document.createElement("article");
+    root.innerHTML = '<p><span data-file-highlight="-1">重点内容</span></p>';
+    const observer = new MutationObserver(() => {});
+    observer.observe(root, { subtree: true, childList: true, characterData: true });
+    root.querySelector("span")!.textContent = "新内容";
+    expect(highlightMutationsMatter(observer.takeRecords(), false)).toBe(true);
+    root.querySelector("p")!.remove();
+    expect(highlightMutationsMatter(observer.takeRecords(), false)).toBe(true);
+    observer.disconnect();
+  });
   it("creates an anchor from a rendered selection and ignores toolbar text", () => {
     const root = document.createElement("article");
     root.innerHTML = '<h2 id="chapter"><button class="section-fold-button">折叠</button>章节</h2><p>第一段 重点内容 结尾</p>';

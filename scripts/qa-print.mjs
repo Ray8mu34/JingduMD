@@ -21,6 +21,7 @@ try {
   await page.waitForFunction(() => [...document.querySelectorAll(".math-display")].every((element) => element.querySelector(".katex")), undefined, { timeout: 15000 });
   await page.locator(".code-block pre code").first().waitFor();
   await page.evaluate(() => {
+    document.querySelector(".markdown-body").classList.add("long-document");
     const tbody = document.querySelector(".table-frame tbody");
     const row = tbody.querySelector("tr");
     for (let i = 0; i < 80; i++) tbody.append(row.cloneNode(true));
@@ -29,6 +30,8 @@ try {
     code.textContent = Array.from({ length: 110 }, (_, index) => `console.log("print line ${index + 1}");`).join("\n") + "\nconsole.log(\"print-last-line\");";
   });
   await page.emulateMedia({ media: "print" });
+  const skipped = await page.locator(".markdown-body > *").evaluateAll(nodes => nodes.some(node => getComputedStyle(node).contentVisibility === "auto"));
+  if (skipped) throw new Error("Print still skips offscreen long-document content");
   await page.pdf({ path: pdfPath, format: "A4", printBackground: true });
   const info = execFileSync("pdfinfo", [pdfPath], { encoding: "utf8" });
   const pages = Number(/Pages:\s+(\d+)/.exec(info)?.[1] ?? 0);

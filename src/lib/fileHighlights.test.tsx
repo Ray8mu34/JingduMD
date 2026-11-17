@@ -9,6 +9,20 @@ import type { TextHighlight } from "../types";
 
 const legacy = (quote: string, id = 1): TextHighlight => ({ id, quote, prefix: "", suffix: "", path: "a.md", root: "", color: "green", startOffset: 0, endOffset: quote.length, headingId: null, createdMs: 0, updatedMs: 0 });
 describe("Markdown source highlights", () => {
+  it("maps a selection inside one text node without traversing the rest of the book", () => {
+    const root = document.createElement("article");
+    root.innerHTML = '<p><span data-source-start="120">选择这行正文</span></p><div class="lazy-math"><span>generated formula</span></div>';
+    document.body.append(root);
+    const range = document.createRange(), selection = window.getSelection()!;
+    range.setStart(root.querySelector("p span")!.firstChild!, 2);
+    range.setEnd(root.querySelector("p span")!.firstChild!, 4);
+    selection.removeAllRanges(); selection.addRange(range);
+    const walk = vi.spyOn(document, "createTreeWalker");
+    try {
+      expect(sourceSelections(root, selection)).toEqual([{ start: 122, end: 124 }]);
+      expect(walk).not.toHaveBeenCalled();
+    } finally { walk.mockRestore(); selection.removeAllRanges(); root.remove(); }
+  });
   it.each(["\n", "\r\n"])("maps indented list prose from the reported paragraph (%j)", (newline) => {
     const quote = "在实践中可能看见这么一种经验做法：使用一个固定的学习率来进行训练的同时观察验证集错误率，每当验证集错误率停止下降，就乘以一个常数（比如0.5）来降低学习率";
     const source = `- **随步数衰减**${newline}  ：每进行几个周期降低学习率。${quote}。${newline}- **指数衰减**${newline}  数学公式是 $x$。`;

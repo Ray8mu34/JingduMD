@@ -1,6 +1,6 @@
 import { render } from "@testing-library/react";
 import MarkdownReader from "../components/MarkdownReader";
-import { notebookHighlights } from "./notebookHighlights";
+import { documentHighlightRecords, notebookHighlights } from "./notebookHighlights";
 import { parseFileHighlights, sourceSelections } from "./fileHighlights";
 import { normalizeNotebookSource, parseNotebook, notebookOutline } from "./notebook";
 
@@ -40,6 +40,8 @@ describe("notebook Markdown highlights", () => {
     const ranges = [first, last].map((cell, index) => ({ id: -100 - index, start: cell.offset + cell.clean.indexOf("重复正文"), end: cell.offset + cell.clean.indexOf("重复正文") + 4, color: "green" as const }));
     const saved = model.serialize(ranges);
     const loaded = notebookHighlights(saved);
+    expect(documentHighlightRecords(saved, "marks.ipynb", "notes", parseNotebook(saved)))
+      .toEqual(documentHighlightRecords(saved, "marks.ipynb", "notes"));
     expect(loaded.records.map(r => r.quote)).toEqual(["重复正文", "重复正文"]);
     expect(new Set(loaded.records.map(r => r.id)).size).toBe(2);
     const view = renderNotebook(saved);

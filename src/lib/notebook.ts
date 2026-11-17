@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import { extractOutline } from "./markdown";
 import { normalized, parseFileHighlights } from "./fileHighlights";
+import type { DocumentPayload } from "../types";
 
 export const isNotebook = (path: string) => /\.ipynb$/i.test(path);
 type RecordValue = Record<string, unknown>;
@@ -11,6 +12,21 @@ export function notebookString(value: unknown): string {
 export type NotebookOutput = { kind: "text" | "image" | "html" | "notice"; value: string };
 export type NotebookCell = { type: string; source: string; attachments: RecordValue; outputs: NotebookOutput[] };
 export type Notebook = { cells: NotebookCell[]; language: string };
+export type NotebookSnapshot = { data?: Notebook; error?: string };
+const documentSnapshots = new WeakMap<DocumentPayload, { content: string; path: string; snapshot: NotebookSnapshot }>();
+
+/** Share one parse across outline, statistics, rendering and highlight readers.
+ * Weak keys let closed/replaced documents, including large outputs, be collected. */
+export function notebookSnapshot(document: DocumentPayload | null): NotebookSnapshot | null {
+  if (!document || !isNotebook(document.path)) return null;
+  const cached = documentSnapshots.get(document);
+  if (cached?.content === document.content && cached.path === document.path) return cached.snapshot;
+  let snapshot: NotebookSnapshot;
+  try { snapshot = { data: parseNotebook(document.content) }; }
+  catch (error) { snapshot = { error: error instanceof Error ? error.message : String(error) }; }
+  documentSnapshots.set(document, { content: document.content, path: document.path, snapshot });
+  return snapshot;
+}
 
 /** Jupyter accepts $$ with TeX on the opening/closing line. remark-math
  * interprets opening-line TeX as fence metadata and requires a closing fence
